@@ -1,6 +1,7 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
 import type { ToWorklet } from '../audio/messages'
 import { arrangePads, remapEvents, type Category } from '../classify/categories'
+import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
@@ -13,6 +14,7 @@ export type Sample = { name: string; left: Float32Array; right: Float32Array; mo
 const PADS = 16
 const CORRECTIONS_KEY = 'sily.corrections'
 const CLASSIFY_DELAY_MS = 150
+const CANDIDATES = 4
 const identity = () => Array.from({ length: PADS }, (_, i) => i)
 const EXPORT_TAIL_SECONDS = 2
 const SILENCE = 1e-4
@@ -46,6 +48,12 @@ export class Session {
   padSlices = $state<number[]>(identity())
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
+  style = $state<Style>('boom_bap')
+  density = $state(0.5)
+  looseness = $state(0.5)
+  candidates = $state<PadEvent[][]>([])
+  previewing = $state<number | null>(null)
+  private beforeGenerate: PadEvent[] | null = null
 
   private lastTick = { frame: 0, time: 0 }
   private capture: Capture | null = null
@@ -73,6 +81,7 @@ export class Session {
       if (t.auditionFrame !== null) this.lastTick = { frame: t.auditionFrame, time: t.time }
     }
     sily.onRecorded = (r) => {
+      this.adopt()
       this.events = recordHit(this.events, r.pad, r.beat, r.velocity, r.pitch)
       this.syncEvents()
     }
@@ -99,6 +108,7 @@ export class Session {
     this.sourceBpm = null
     this.loadEngineSample(left, right, null)
     this.sily.send({ type: 'sourceRate', rate: 1 })
+    this.adopt()
     this.markers = []
     this.labels = {}
     this.features.clear()
@@ -227,6 +237,63 @@ export class Session {
     this.pads.forEach((p, pad) => this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse }))
     this.syncEvents()
     this.invalidateStretched()
+  }
+
+  generateCandidates() {
+    if (!this.sample) return
+    const secondsPerFrame = 1 / this.sampleRate / (this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1)
+    const pads: PadInfo[] = []
+    this.padSlices.forEach((_, pad) => {
+      const range = this.sliceRange(pad)
+      const label = this.labelOf(pad)
+      if (!range || !label) return
+      pads.push({ pad, category: label.category, beats: ((range[1] - range[0]) * secondsPerFrame * this.bpm) / 60 })
+    })
+    this.beforeGenerate ??= this.events
+    const base = Math.floor(Math.random() * 1e9)
+    this.candidates = Array.from({ length: CANDIDATES }, (_, i) =>
+      generate({
+        pads,
+        existing: this.beforeGenerate!,
+        style: this.style,
+        density: this.density,
+        looseness: this.looseness,
+        lengthBeats: this.lengthBeats,
+        seed: base + i,
+      }),
+    )
+    this.preview(0)
+  }
+
+  preview(index: number) {
+    const candidate = this.candidates[index]
+    if (!candidate) return
+    this.previewing = index
+    this.events = candidate
+    this.queueEvents()
+  }
+
+  adopt() {
+    this.candidates = []
+    this.previewing = null
+    this.beforeGenerate = null
+  }
+
+  revert() {
+    if (this.beforeGenerate) {
+      this.events = this.beforeGenerate
+      this.queueEvents()
+    }
+    this.adopt()
+  }
+
+  private queueEvents() {
+    this.sily?.send({ type: 'queueEvents', events: this.engineEvents() })
+    this.fillStretched()
+  }
+
+  private engineEvents() {
+    return this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch }))
   }
 
   private sliceStart(slice: number): number | null {
@@ -362,26 +429,31 @@ export class Session {
   }
 
   toggleStepAt(pad: number, beat: number) {
+    this.adopt()
     this.events = toggleStep(this.events, pad, beat, this.grid / 2)
     this.syncEvents()
   }
 
   nudge(id: string, delta: number) {
+    this.adopt()
     this.events = nudgeEvent(this.events, id, delta)
     this.syncEvents()
   }
 
   shiftPitch(id: string, delta: number) {
+    this.adopt()
     this.events = shiftPitch(this.events, id, delta)
     this.syncEvents()
   }
 
   remove(id: string) {
+    this.adopt()
     this.events = removeEvent(this.events, id)
     this.syncEvents()
   }
 
   clearPattern() {
+    this.adopt()
     this.events = []
     this.syncEvents()
   }
@@ -486,7 +558,7 @@ export class Session {
   private syncEvents() {
     this.sily?.send({
       type: 'events',
-      events: this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch })),
+      events: this.engineEvents(),
     })
     this.fillStretched()
   }
