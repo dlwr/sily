@@ -56,6 +56,7 @@ pub struct Engine {
     pads: Vec<Pad>,
     voices: [Voice; VOICES],
     pattern: Pattern,
+    queued: Option<Vec<Event>>,
     bpm: f64,
     playing: bool,
     beat: f64,
@@ -85,6 +86,7 @@ impl Engine {
             pads: vec![Pad { gain: 1.0, ..Pad::default() }; PADS],
             voices: [Voice::SILENT; VOICES],
             pattern,
+            queued: None,
             bpm: 90.0,
             playing: false,
             beat: 0.0,
@@ -174,6 +176,11 @@ impl Engine {
     }
 
     pub fn set_playing(&mut self, playing: bool) {
+        if !playing {
+            if let Some(events) = self.queued.take() {
+                self.replace_events(events);
+            }
+        }
         if playing && !self.playing {
             self.beat = 0.0;
             self.played = 0.0;
@@ -208,6 +215,21 @@ impl Engine {
         }
     }
 
+    pub fn queue_events(&mut self, events: Vec<Event>) {
+        if self.playing {
+            self.queued = Some(events);
+        } else {
+            self.replace_events(events);
+        }
+    }
+
+    fn replace_events(&mut self, events: Vec<Event>) {
+        self.pattern.clear();
+        for e in events.into_iter().take(MAX_EVENTS) {
+            self.pattern.push(e);
+        }
+    }
+
     pub fn beat(&self) -> f64 {
         self.beat
     }
@@ -237,12 +259,27 @@ impl Engine {
                 Some(limit) => span.min((limit - self.played).max(0.0)),
                 None => span,
             };
+            let length = self.pattern.length_beats();
+            let head = length - self.beat;
+            let wraps = audible_span > head;
+            let first_span = if wraps && self.queued.is_some() { head } else { audible_span };
             let pending = &mut self.pending;
-            self.pattern.for_each_in_span(self.beat, audible_span, |offset, e| {
+            self.pattern.for_each_in_span(self.beat, first_span, |offset, e| {
                 if pending.len() < pending.capacity() {
                     pending.push((frame_offset(offset, beats_per_frame, frames), *e));
                 }
             });
+            if wraps {
+                if let Some(events) = self.queued.take() {
+                    self.replace_events(events);
+                    let pending = &mut self.pending;
+                    self.pattern.for_each_in_span(0.0, audible_span - head, |offset, e| {
+                        if pending.len() < pending.capacity() {
+                            pending.push((frame_offset(head + offset, beats_per_frame, frames), *e));
+                        }
+                    });
+                }
+            }
             if self.metronome {
                 let mut k = self.beat.ceil();
                 let mut n = 0;
@@ -849,5 +886,59 @@ mod tests {
         e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - src[20]).abs() < 1e-4);
+    }
+
+    fn at(beat: f64, pad: u8) -> Event {
+        Event { beat, pad, velocity: 1.0, nudge: 0.0, pitch: 0.0 }
+    }
+
+    #[test]
+    fn queued_events_wait_for_the_loop_to_wrap() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.add_event(at(0.0, 0));
+        e.set_playing(true);
+        render(&mut e, 200);
+        e.queue_events(vec![at(0.5, 0)]);
+        let out = render(&mut e, 1400);
+        let heard: Vec<usize> = [300, 800, 1300].iter().filter_map(|&from| first_sound(&out[from..from + 100]).map(|i| i + from)).collect();
+        assert_eq!(heard, vec![1300]);
+    }
+
+    #[test]
+    fn queued_events_apply_at_once_when_stopped() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.queue_events(vec![at(0.5, 0)]);
+        e.set_playing(true);
+        assert_eq!(first_sound(&render(&mut e, 1000)), Some(500));
+    }
+
+    #[test]
+    fn queued_events_replace_the_old_pattern() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.add_event(at(0.25, 0));
+        e.set_playing(true);
+        render(&mut e, 400);
+        e.queue_events(vec![at(0.5, 0)]);
+        let out = render(&mut e, 1000);
+        assert_eq!(first_sound(&out[800..900]), None);
+    }
+
+    #[test]
+    fn stopping_applies_queued_events() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.set_playing(true);
+        render(&mut e, 200);
+        e.queue_events(vec![at(0.5, 0)]);
+        e.set_playing(false);
+        e.set_playing(true);
+        assert_eq!(first_sound(&render(&mut e, 1000)), Some(500));
     }
 }

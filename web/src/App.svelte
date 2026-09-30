@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Generator from './components/Generator.svelte'
   import PadInspector from './components/PadInspector.svelte'
   import Pads from './components/Pads.svelte'
   import PatternGrid from './components/PatternGrid.svelte'
@@ -51,6 +52,10 @@
         session.markAtKey(e.timeStamp)
         return
     }
+    if (e.code === 'KeyG' && !session.keyboardMode) {
+      session.generateCandidates()
+      return
+    }
     if (session.keyboardMode) {
       const note = noteForCode(e.code)
       if (note !== undefined) session.noteDown(note, e.timeStamp)
@@ -102,6 +107,7 @@
         <PadInspector {session} />
       </div>
       <div class="pattern-area">
+        <Generator {session} />
         <PatternGrid {session} />
       </div>
     </section>

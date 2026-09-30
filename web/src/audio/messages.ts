@@ -13,6 +13,7 @@ export type ToWorklet =
   | { type: 'playLimit'; beats: number | null }
   | { type: 'groove'; grid: number; strength: number; swing: number }
   | { type: 'events'; events: { beat: number; pad: number; velocity: number; nudge: number; pitch: number }[] }
+  | { type: 'queueEvents'; events: { beat: number; pad: number; velocity: number; nudge: number; pitch: number }[] }
   | { type: 'record'; pad: number; velocity: number; pitch: number; time: number }
 
 export type FromWorklet =
