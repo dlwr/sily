@@ -1,0 +1,80 @@
+:root {
+  --bg: #111213;
+  --surface: #191a1c;
+  --surface-2: #222326;
+  --line: #2e3033;
+  --text: #e9e7e4;
+  --muted: #8b8985;
+  --accent: #ff5a1f;
+  --accent-soft: rgba(255, 90, 31, 0.18);
+  --marker: #f2c14e;
+  --wave: #b9c3c9;
+  font-family: system-ui, -apple-system, 'Hiragino Sans', sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  min-height: 100vh;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
+
+button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+select,
+input[type='number'] {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+
+input[type='range'] {
+  accent-color: var(--accent);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+kbd {
+  font: inherit;
+  font-size: 12px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface-2);
+}

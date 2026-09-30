@@ -1,0 +1,25 @@
+{
+  "name": "sily-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm wasm && vite",
+    "build": "pnpm wasm && vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "wasm": "cargo build -p sily-wasm --target wasm32-wasip1 --release --manifest-path ../Cargo.toml && cp ../target/wasm32-wasip1/release/sily_wasm.wasm src/wasm/sily.wasm",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.13.3",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.2"
+  },
+  "packageManager": "pnpm@10.26.2"
+}
