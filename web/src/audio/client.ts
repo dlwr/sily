@@ -1,3 +1,5 @@
+import { CATEGORIES, type Category } from '../classify/categories'
+import model from '../classify/model.json'
 import wasmUrl from '../wasm/sily.wasm?url'
 import { audibleTime } from '../state/timing'
 import type { FromWorklet, ToWorklet } from './messages'
@@ -40,7 +42,13 @@ export class Sily {
     const analyser = ctx.createAnalyser()
     node.connect(analyser)
     analyser.connect(ctx.destination)
-    return new Sily(ctx, module, node, instantiate(module, () => performance.now() / 1000), analyser)
+    const analysis = instantiate(module, () => performance.now() / 1000)
+    const json = new TextEncoder().encode(JSON.stringify(model))
+    const ptr = analysis.alloc(json.length)
+    new Uint8Array(analysis.memory.buffer, ptr, json.length).set(json)
+    analysis.classifier_load(ptr, json.length)
+    analysis.dealloc(ptr, json.length)
+    return new Sily(ctx, module, node, analysis, analyser)
   }
 
   get sampleRate() {
@@ -88,6 +96,18 @@ export class Sily {
     return withFloats(w, [mono], ([ptr]) => {
       const count = w.analyze_onsets(ptr, mono.length, this.sampleRate, sensitivity)
       return Array.from(new Uint32Array(w.memory.buffer, w.result_frames(), count))
+    })
+  }
+
+  classify(mono: Float32Array): { category: Category; confidence: number; features: number[] } {
+    const w = this.analysis
+    return withFloats(w, [mono], ([ptr]) => {
+      const index = w.classify_slice(ptr, mono.length, this.sampleRate)
+      return {
+        category: CATEGORIES[index] ?? 'perc',
+        confidence: w.result_confidence(),
+        features: Array.from(new Float32Array(w.memory.buffer, w.result_features(), w.result_features_len())),
+      }
     })
   }
 
