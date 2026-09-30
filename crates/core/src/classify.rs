@@ -28,7 +28,14 @@ pub struct Prediction {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Model {
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Model {
+    Linear(LinearModel),
+    Trees(TreeModel),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearModel {
     pub classes: Vec<Category>,
     pub mean: Vec<f32>,
     pub scale: Vec<f32>,
@@ -36,26 +43,82 @@ pub struct Model {
     pub bias: Vec<f32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeModel {
+    pub classes: Vec<Category>,
+    pub baseline: Vec<f32>,
+    pub trees: Vec<Tree>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tree {
+    pub class: usize,
+    pub feature: Vec<u16>,
+    pub threshold: Vec<f32>,
+    pub left: Vec<u32>,
+    pub right: Vec<u32>,
+    pub value: Vec<f32>,
+    pub leaf: Vec<bool>,
+}
+
 impl Model {
+    pub fn probabilities(&self, features: &Features) -> Vec<(Category, f32)> {
+        let x = features.to_vec();
+        let (classes, logits) = match self {
+            Model::Linear(m) => (&m.classes, m.logits(&x)),
+            Model::Trees(m) => (&m.classes, m.logits(&x)),
+        };
+        classes.iter().copied().zip(softmax(&logits)).collect()
+    }
+
     pub fn predict(&self, features: &Features) -> Prediction {
-        let x: Vec<f32> = features
-            .to_vec()
+        self.probabilities(features)
+            .into_iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(category, confidence)| Prediction { category, confidence })
+            .unwrap_or(Prediction { category: Category::Perc, confidence: 0.0 })
+    }
+}
+
+impl LinearModel {
+    fn logits(&self, x: &[f32]) -> Vec<f32> {
+        let z: Vec<f32> = x
             .iter()
             .enumerate()
             .map(|(i, v)| (v - self.mean.get(i).copied().unwrap_or(0.0)) / self.scale.get(i).copied().filter(|s| *s > 0.0).unwrap_or(1.0))
             .collect();
-        let logits: Vec<f32> = self
-            .weights
-            .iter()
-            .zip(&self.bias)
-            .map(|(w, b)| w.iter().zip(&x).map(|(w, x)| w * x).sum::<f32>() + b)
-            .collect();
-        let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let exp: Vec<f32> = logits.iter().map(|l| (l - max).exp()).collect();
-        let sum: f32 = exp.iter().sum();
-        let (best, p) = exp.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, e)| (i, e / sum)).unwrap_or((0, 0.0));
-        Prediction { category: self.classes.get(best).copied().unwrap_or(Category::Perc), confidence: p }
+        self.weights.iter().zip(&self.bias).map(|(w, b)| w.iter().zip(&z).map(|(w, x)| w * x).sum::<f32>() + b).collect()
     }
+}
+
+impl TreeModel {
+    fn logits(&self, x: &[f32]) -> Vec<f32> {
+        let mut logits = self.baseline.clone();
+        for tree in &self.trees {
+            if let Some(l) = logits.get_mut(tree.class) {
+                *l += tree.evaluate(x);
+            }
+        }
+        logits
+    }
+}
+
+impl Tree {
+    fn evaluate(&self, x: &[f32]) -> f32 {
+        let mut node = 0usize;
+        while !self.leaf.get(node).copied().unwrap_or(true) {
+            let v = x.get(self.feature[node] as usize).copied().unwrap_or(0.0);
+            node = if v <= self.threshold[node] { self.left[node] } else { self.right[node] } as usize;
+        }
+        self.value.get(node).copied().unwrap_or(0.0)
+    }
+}
+
+fn softmax(logits: &[f32]) -> Vec<f32> {
+    let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let exp: Vec<f32> = logits.iter().map(|l| (l - max).exp()).collect();
+    let sum: f32 = exp.iter().sum();
+    exp.iter().map(|e| e / sum).collect()
 }
 
 const RULE_CONFIDENCE: f32 = 0.4;
@@ -136,13 +199,13 @@ mod tests {
         let mut w1 = vec![0.0; LEN];
         w0[0] = -4.0;
         w1[0] = 4.0;
-        Model {
+        Model::Linear(LinearModel {
             classes: vec![Category::Kick, Category::Bass],
             mean: vec![0.5; LEN],
             scale: vec![0.25; LEN],
             weights: vec![w0, w1],
             bias: vec![0.0, 0.0],
-        }
+        })
     }
 
     #[test]
@@ -212,5 +275,50 @@ mod tests {
             *x = *x * 0.3 + t;
         }
         assert_eq!(category(&s), Category::ClosedHat);
+    }
+
+    fn split_on_duration(class: usize, short: f32, long: f32) -> Tree {
+        Tree {
+            class,
+            feature: vec![0, 0, 0],
+            threshold: vec![0.5, 0.0, 0.0],
+            left: vec![1, 0, 0],
+            right: vec![2, 0, 0],
+            value: vec![0.0, short, long],
+            leaf: vec![false, true, true],
+        }
+    }
+
+    fn tree_model(trees: Vec<Tree>) -> Model {
+        Model::Trees(TreeModel { classes: vec![Category::Kick, Category::Bass], baseline: vec![0.0, 0.0], trees })
+    }
+
+    #[test]
+    fn trees_follow_their_thresholds() {
+        let m = tree_model(vec![split_on_duration(1, -2.0, 2.0)]);
+        let short = extract(&tone(60.0, 0.2, 20.0), SR);
+        let long = extract(&tone(60.0, 1.0, 1.0), SR);
+        assert_eq!((m.predict(&short).category, m.predict(&long).category), (Category::Kick, Category::Bass));
+    }
+
+    #[test]
+    fn trees_of_the_same_class_add_up() {
+        let one = tree_model(vec![split_on_duration(1, 0.0, 1.0)]);
+        let two = tree_model(vec![split_on_duration(1, 0.0, 1.0), split_on_duration(1, 0.0, 1.0)]);
+        let long = extract(&tone(60.0, 1.0, 1.0), SR);
+        assert!(two.predict(&long).confidence > one.predict(&long).confidence);
+    }
+
+    #[test]
+    fn probabilities_cover_every_class_and_sum_to_one() {
+        let p = tree_model(vec![split_on_duration(1, -2.0, 2.0)]).probabilities(&extract(&tone(60.0, 1.0, 1.0), SR));
+        assert_eq!(p.len(), 2);
+        assert!((p.iter().map(|(_, v)| v).sum::<f32>() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn models_load_from_tagged_json() {
+        let json = r#"{"kind":"trees","classes":["kick","bass"],"baseline":[0,0],"trees":[]}"#;
+        assert!(matches!(serde_json::from_str::<Model>(json).unwrap(), Model::Trees(_)));
     }
 }
