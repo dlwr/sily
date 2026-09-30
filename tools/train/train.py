@@ -69,12 +69,16 @@ def main() -> None:
 
     xs, ys = load_folders(args.folders)
     cx, cy = load_corrections(args.corrections)
-    x = np.array(xs + cx, dtype=np.float64)
-    y = np.array(ys + cy)
+    width = len(xs[0]) if xs else 0
+    kept = [(f, label) for f, label in zip(cx, cy) if len(f) == width]
+    if len(kept) < len(cx):
+        print(f"skipped {len(cx) - len(kept)} corrections recorded with older features")
+    x = np.array(xs + [f for f, _ in kept], dtype=np.float64)
+    y = np.array(ys + [label for _, label in kept])
     if len(set(y)) < 2:
         raise SystemExit("クラスが2つ以上必要")
 
-    model = HistGradientBoostingClassifier(max_iter=60, max_leaf_nodes=15, learning_rate=0.1, random_state=0)
+    model = HistGradientBoostingClassifier(max_iter=100, max_leaf_nodes=15, learning_rate=0.1, class_weight="balanced", random_state=0)
     folds = min(5, min(np.unique(y, return_counts=True)[1]))
     if folds >= 2:
         predicted = cross_val_predict(model, x, y, cv=folds)
