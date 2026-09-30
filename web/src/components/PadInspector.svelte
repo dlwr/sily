@@ -59,6 +59,22 @@
     />
     <span class="num">{Math.round(pad.gain * 100)}%</span>
   </label>
+  <label>
+    チョーク
+    <select
+      value={pad.chokeAuto ? 'auto' : String(pad.choke)}
+      onchange={(e) => {
+        const v = e.currentTarget.value
+        session.setPad(session.selectedPad, v === 'auto' ? { chokeAuto: true } : { chokeAuto: false, choke: Number(v) })
+      }}
+      title="同じグループのパッドは、どれかが鳴ると他の音を止める（ハットの開閉など）"
+    >
+      <option value="auto">自動（ハット同士）</option>
+      <option value="0">なし</option>
+      {#each [1, 2, 3] as g}<option value={String(g)}>グループ {g}</option>{/each}
+    </select>
+    <span class="num muted">{pad.choke > 0 ? pad.choke : ''}</span>
+  </label>
   <div class="modes" role="radiogroup" aria-label="ピッチの扱い">
     <button aria-pressed={!pad.stretch} onclick={() => session.setPad(session.selectedPad, { stretch: false })}>
       速度と連動
