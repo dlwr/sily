@@ -308,9 +308,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sily-tools"
+version = "0.1.0"
+dependencies = [
+ "sily-core",
+ "symphonia",
+]
+
+[[package]]
 name = "sily-wasm"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sily-core",
  "stratum-dsp",
  "timestretch",

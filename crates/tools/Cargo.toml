@@ -1,0 +1,10 @@
+[package]
+name = "sily-tools"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+sily-core = { path = "../core" }
+symphonia = { version = "0.5", features = ["mp3", "wav", "ogg", "vorbis", "flac", "aiff"] }

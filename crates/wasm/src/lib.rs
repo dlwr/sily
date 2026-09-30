@@ -1,4 +1,6 @@
+use sily_core::classify::{classify, Category, Model};
 use sily_core::engine::Engine;
+use sily_core::features::extract;
 use sily_core::sequencer::{Event, Groove};
 use sily_core::slicing::onset_markers;
 use std::alloc::{alloc as raw_alloc, dealloc as raw_dealloc, Layout};
@@ -7,6 +9,9 @@ use std::slice;
 static mut ENGINE: Option<Engine> = None;
 static mut RESULT_FRAMES: Vec<u32> = Vec::new();
 static mut RESULT_AUDIO: [Vec<f32>; 2] = [Vec::new(), Vec::new()];
+static mut MODEL: Option<Model> = None;
+static mut RESULT_FEATURES: Vec<f32> = Vec::new();
+static mut RESULT_CONFIDENCE: f32 = 0.0;
 
 #[allow(static_mut_refs)]
 fn engine() -> &'static mut Engine {
@@ -198,4 +203,62 @@ pub unsafe extern "C" fn stretch(left: *const f32, right: *const f32, frames: u3
 #[no_mangle]
 pub extern "C" fn engine_set_play_limit(beats: f64) {
     engine().set_play_limit((beats >= 0.0).then_some(beats));
+}
+
+#[no_mangle]
+pub extern "C" fn engine_set_pad_slice(pad: u32, slice: u32) {
+    engine().set_pad_slice(pad as usize, slice as usize);
+}
+
+const CATEGORIES: [Category; 15] = [
+    Category::Kick,
+    Category::Snare,
+    Category::Clap,
+    Category::Rim,
+    Category::ClosedHat,
+    Category::OpenHat,
+    Category::Tom,
+    Category::Cymbal,
+    Category::Perc,
+    Category::Bass,
+    Category::Keys,
+    Category::Vocal,
+    Category::Melody,
+    Category::Fx,
+    Category::Upper,
+];
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn classifier_load(json: *const u8, len: u32) -> u32 {
+    let text = std::str::from_utf8(slice::from_raw_parts(json, len as usize)).unwrap_or("null");
+    MODEL = serde_json::from_str::<Option<Model>>(text).ok().flatten();
+    MODEL.is_some() as u32
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn classify_slice(mono: *const f32, frames: u32, sample_rate: u32) -> u32 {
+    let features = extract(floats(mono, frames), sample_rate);
+    let prediction = classify(&features, MODEL.as_ref());
+    RESULT_FEATURES = features.to_vec();
+    RESULT_CONFIDENCE = prediction.confidence;
+    CATEGORIES.iter().position(|c| *c == prediction.category).unwrap_or(8) as u32
+}
+
+#[no_mangle]
+pub extern "C" fn result_confidence() -> f32 {
+    unsafe { RESULT_CONFIDENCE }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn result_features() -> *const f32 {
+    unsafe { RESULT_FEATURES.as_ptr() }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn result_features_len() -> u32 {
+    unsafe { RESULT_FEATURES.len() as u32 }
 }
