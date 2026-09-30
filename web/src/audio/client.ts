@@ -1,5 +1,4 @@
 import { CATEGORIES, type Category } from '../classify/categories'
-import model from '../classify/model.json'
 import wasmUrl from '../wasm/sily.wasm?url'
 import { audibleTime } from '../state/timing'
 import type { DspJob, Stereo } from './dsp.worker'
@@ -34,8 +33,9 @@ export class Sily {
 
   static async create(): Promise<Sily> {
     const ctx = new AudioContext({ latencyHint: 'interactive' })
-    const [module] = await Promise.all([
+    const [module, { default: model }] = await Promise.all([
       WebAssembly.compileStreaming(fetch(wasmUrl)),
+      import('../classify/model.json'),
       ctx.audioWorklet.addModule(workletUrl),
     ])
     const node = new AudioWorkletNode(ctx, 'sily', {
