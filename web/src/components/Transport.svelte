@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Session } from '../state/session.svelte'
+  import ProjectBar from './ProjectBar.svelte'
 
   let { session }: { session: Session } = $props()
 
@@ -8,6 +9,7 @@
 
 <header>
   <h1>sily</h1>
+  <ProjectBar {session} />
   <div class="group">
     <button aria-pressed={session.playing} onclick={() => session.togglePlaying()}>
       {session.playing ? 'Stop' : 'Play'} <kbd>Space</kbd>
