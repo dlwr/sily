@@ -40,6 +40,7 @@ export type SilyExports = {
   result_confidence(): number
   result_features(): number
   result_features_len(): number
+  result_scores(): number
 }
 
 export const instantiate = (module: WebAssembly.Module, now: () => number): SilyExports => {

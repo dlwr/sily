@@ -99,7 +99,12 @@ export class Sily {
     })
   }
 
-  classify(mono: Float32Array): { category: Category; confidence: number; features: number[] } {
+  classify(mono: Float32Array): {
+    category: Category
+    confidence: number
+    features: number[]
+    scores: Partial<Record<Category, number>>
+  } {
     const w = this.analysis
     return withFloats(w, [mono], ([ptr]) => {
       const index = w.classify_slice(ptr, mono.length, this.sampleRate)
@@ -107,6 +112,9 @@ export class Sily {
         category: CATEGORIES[index] ?? 'perc',
         confidence: w.result_confidence(),
         features: Array.from(new Float32Array(w.memory.buffer, w.result_features(), w.result_features_len())),
+        scores: Object.fromEntries(
+          Array.from(new Float32Array(w.memory.buffer, w.result_scores(), CATEGORIES.length)).map((p, i) => [CATEGORIES[i], p]),
+        ),
       }
     })
   }

@@ -9,6 +9,7 @@ FREESOUND_API_KEY を環境変数か、リポジトリ直下の .env に置い�
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import pathlib
@@ -51,39 +52,48 @@ def search(key: str, query: str, page: int) -> dict:
     return res.json()
 
 
+def download(url: str, path: pathlib.Path) -> bool:
+    if path.exists():
+        return True
+    audio = requests.get(url, timeout=30)
+    if audio.status_code != 200:
+        return False
+    path.write_bytes(audio.content)
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--per-class", type=int, default=300)
+    parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
     key = api_key()
     seen: set[int] = set()
     manifest = []
-    for label, queries in QUERIES.items():
-        folder = OUT / label
-        folder.mkdir(parents=True, exist_ok=True)
-        count = 0
-        for query in queries:
-            page = 1
-            while count < args.per_class:
-                data = search(key, query, page)
-                for sound in data["results"]:
-                    if count >= args.per_class or sound["id"] in seen:
-                        continue
-                    seen.add(sound["id"])
-                    path = folder / f"{sound['id']}.mp3"
-                    if not path.exists():
-                        audio = requests.get(sound["previews"]["preview-hq-mp3"], timeout=30)
-                        if audio.status_code != 200:
-                            continue
-                        path.write_bytes(audio.content)
-                    manifest.append({"id": sound["id"], "label": label, "name": sound["name"], "path": str(path)})
-                    count += 1
-                if not data.get("next"):
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
+        for label, queries in QUERIES.items():
+            folder = OUT / label
+            folder.mkdir(parents=True, exist_ok=True)
+            picked = []
+            for query in queries:
+                page = 1
+                while len(picked) < args.per_class:
+                    data = search(key, query, page)
+                    for sound in data["results"]:
+                        if len(picked) < args.per_class and sound["id"] not in seen:
+                            seen.add(sound["id"])
+                            picked.append(sound)
+                    if not data.get("next"):
+                        break
+                    page += 1
+                if len(picked) >= args.per_class:
                     break
-                page += 1
-            if count >= args.per_class:
-                break
-        print(f"{label}: {count}")
+            paths = [folder / f"{s['id']}.mp3" for s in picked]
+            ok = list(pool.map(download, [s["previews"]["preview-hq-mp3"] for s in picked], paths))
+            for sound, path, fine in zip(picked, paths, ok):
+                if fine:
+                    manifest.append({"id": sound["id"], "label": label, "name": sound["name"], "path": str(path)})
+            print(f"{label}: {sum(ok)}", flush=True)
     (OUT / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1))
 
 

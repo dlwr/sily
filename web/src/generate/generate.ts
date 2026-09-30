@@ -2,7 +2,7 @@ import type { Category } from '../classify/categories'
 import type { PadEvent } from '../state/pattern'
 
 export type Style = 'boom_bap' | 'dilla' | 'breakbeat' | 'four_on_floor'
-export type PadInfo = { pad: number; category: Category; beats: number }
+export type PadInfo = { pad: number; category: Category; beats: number; scores: Partial<Record<Category, number>> }
 export type GenerateInput = {
   pads: PadInfo[]
   existing: PadEvent[]
@@ -27,6 +27,8 @@ const STEPS = 16
 const STEP_BEATS = 0.25
 const CERTAIN = 0.95
 const LONG_SLICE_BEATS = 1
+const CORE_PARTS: Part[] = ['kick', 'snare', 'hat']
+const PROTECTED_PARTS: Part[] = [...CORE_PARTS, 'bass', 'upper']
 
 const PART_CATEGORIES: Record<Part, Category[]> = {
   kick: ['kick'],
@@ -141,15 +143,29 @@ export const generate = (input: GenerateInput): PadEvent[] => {
   }
   const pitchFor = (lane: Lane) => (lane.pitches ? lane.pitches[Math.floor(rand() * lane.pitches.length)] : 0)
 
+  const chosen = new Map<Part, { info: PadInfo; standIn: boolean }>()
   for (const [part, candidates] of byPart) {
+    chosen.set(part, { info: candidates[Math.floor(rand() * candidates.length)], standIn: false })
+  }
+  for (const part of CORE_PARTS) {
+    if (chosen.has(part)) continue
+    const taken = new Set([...chosen].filter(([p, c]) => PROTECTED_PARTS.includes(p) || c.standIn).map(([, c]) => c.info.pad))
+    const pool = input.pads.filter((p) => !played.has(p.pad) && !taken.has(p.pad) && p.beats <= LONG_SLICE_BEATS)
+    const score = (p: PadInfo) => PART_CATEGORIES[part].reduce((sum, c) => sum + (p.scores[c] ?? 0), 0)
+    const best = pool.reduce<PadInfo | null>((a, b) => (a === null || score(b) > score(a) ? b : a), null)
+    if (!best) continue
+    for (const [p, c] of chosen) if (c.info.pad === best.pad) chosen.delete(p)
+    chosen.set(part, { info: best, standIn: true })
+  }
+
+  for (const [part, { info, standIn }] of chosen) {
     const lane = template.lanes[part]
     if (!lane) continue
-    const info = candidates[Math.floor(rand() * candidates.length)]
     const melodic = part === 'bass' || part === 'upper'
     if (melodic && info.beats > LONG_SLICE_BEATS) {
       const every = Math.max(4, Math.ceil(info.beats / 4) * 4)
       for (let beat = 0; beat < input.lengthBeats; beat += every) {
-        events.push({ id: nextId(), beat, pad: info.pad, velocity: lane.velocity, nudge: 0, pitch: 0, auto: true })
+        events.push({ id: nextId(), beat, pad: info.pad, velocity: lane.velocity, nudge: 0, pitch: 0, auto: true, standIn })
       }
       continue
     }
@@ -166,6 +182,7 @@ export const generate = (input: GenerateInput): PadEvent[] => {
           nudge: input.looseness === 0 ? 0 : swingShift(step) * input.looseness + nudgeFor(part),
           pitch: melodic ? pitchFor(lane) : 0,
           auto: true,
+          standIn,
         })
       })
     }

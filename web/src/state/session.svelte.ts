@@ -9,7 +9,12 @@ import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './sour
 import { frameAt } from './timing'
 
 export type PadSettings = { pitch: number; gain: number; stretch: boolean; reverse: boolean }
-export type Label = { category: Category; confidence: number; manual: boolean }
+export type Label = {
+  category: Category
+  confidence: number
+  manual: boolean
+  scores: Partial<Record<Category, number>>
+}
 export type Sample = { name: string; left: Float32Array; right: Float32Array; mono: Float32Array }
 
 const PADS = 16
@@ -216,7 +221,7 @@ export class Session {
   setLabel(pad: number, category: Category) {
     const start = this.sliceStart(this.padSlices[pad])
     if (start === null) return
-    this.labels[start] = { category, confidence: 1, manual: true }
+    this.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
     const features = this.features.get(start)
     if (features) {
       const corrections = [...readCorrections(), { features, label: category }]
@@ -253,7 +258,12 @@ export class Session {
       const range = this.sliceRange(pad)
       const label = this.labelOf(pad)
       if (!range || !label) return
-      pads.push({ pad, category: label.category, beats: ((range[1] - range[0]) * secondsPerFrame * this.bpm) / 60 })
+      pads.push({
+        pad,
+        category: label.category,
+        beats: ((range[1] - range[0]) * secondsPerFrame * this.bpm) / 60,
+        scores: label.scores,
+      })
     })
     this.beforeGenerate ??= this.events
     const base = Math.floor(Math.random() * 1e9)
@@ -327,7 +337,7 @@ export class Session {
       }
       const result = this.sily.classify(this.sample.mono.subarray(start, end))
       this.features.set(start, result.features)
-      labels[start] = { category: result.category, confidence: result.confidence, manual: false }
+      labels[start] = { category: result.category, confidence: result.confidence, manual: false, scores: result.scores }
     }
     this.labels = labels
     this.refineUpper()
@@ -352,7 +362,7 @@ export class Session {
         const result = await this.clap.classify(sample.mono.slice(start, end), this.sampleRate, UPPER_KINDS)
         if (generation !== this.refineGeneration) return
         const current = this.labels[start]
-        if (current && !current.manual) this.labels[start] = { ...result, manual: false }
+        if (current && !current.manual) this.labels[start] = { ...current, ...result }
       }
     } catch {
       this.message = 'うわもの判定のモデルを読み込めなかった'

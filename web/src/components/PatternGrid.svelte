@@ -64,6 +64,7 @@
           <span
             class="event"
             class:auto={ev.auto}
+            class:stand-in={ev.auto && ev.standIn}
             style:left={pct(ev.beat + ev.nudge)}
             style:opacity={0.4 + ev.velocity * 0.6}
             title="ドラッグでずらす / ホイールで音程 / 右クリックで削除"
@@ -84,7 +85,7 @@
   <div class="playhead" style:left="calc(28px + (100% - 28px) * {session.beat / session.lengthBeats})"></div>
 </div>
 <div class="footer">
-  <span class="muted">枠だけのノートは自動で組んだもの / 空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
+  <span class="muted">枠だけのノートは自動で組んだもの（点線は、足りない役を近い音で代役させたもの） / 空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
   <div class="actions">
     <select bind:value={loops} title="書き出す周回数">
       {#each [1, 4, 8] as n}<option value={n}>{n}周</option>{/each}
@@ -150,6 +151,10 @@
   .event.auto {
     background: transparent;
     border: 2px solid var(--accent);
+  }
+
+  .event.stand-in {
+    border-style: dashed;
   }
 
   .pitch {

@@ -6,6 +6,7 @@ export type PadEvent = {
   nudge: number
   pitch: number
   auto?: boolean
+  standIn?: boolean
 }
 
 const PITCH_RANGE = 24
