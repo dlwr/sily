@@ -332,3 +332,12 @@ pub unsafe extern "C" fn engine_set_pad_sample(pad: u32, left: *const f32, right
     let buffer = (frames > 0).then(|| [floats(left, frames).to_vec(), floats(right, frames).to_vec()]);
     engine().set_pad_sample(pad as usize, buffer);
 }
+
+static mut RESULT_CHROMA: [f32; 12] = [0.0; 12];
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn analyze_chroma(mono: *const f32, frames: u32, sample_rate: u32) -> *const f32 {
+    RESULT_CHROMA = sily_core::tonal::chroma(floats(mono, frames), sample_rate);
+    RESULT_CHROMA.as_ptr()
+}
