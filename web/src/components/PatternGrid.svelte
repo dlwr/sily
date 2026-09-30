@@ -63,6 +63,7 @@
         {#each session.events.filter((ev) => ev.pad === pad) as ev (ev.id)}
           <span
             class="event"
+            class:auto={ev.auto}
             style:left={pct(ev.beat + ev.nudge)}
             style:opacity={0.4 + ev.velocity * 0.6}
             title="ドラッグでずらす / ホイールで音程 / 右クリックで削除"
@@ -83,7 +84,7 @@
   <div class="playhead" style:left="calc(28px + (100% - 28px) * {session.beat / session.lengthBeats})"></div>
 </div>
 <div class="footer">
-  <span class="muted">空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
+  <span class="muted">枠だけのノートは自動で組んだもの / 空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
   <div class="actions">
     <select bind:value={loops} title="書き出す周回数">
       {#each [1, 4, 8] as n}<option value={n}>{n}周</option>{/each}
@@ -144,6 +145,11 @@
     background: var(--accent);
     border-radius: 2px;
     cursor: ew-resize;
+  }
+
+  .event.auto {
+    background: transparent;
+    border: 2px solid var(--accent);
   }
 
   .pitch {
