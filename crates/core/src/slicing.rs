@@ -41,16 +41,15 @@ pub fn grid_markers(start: usize, end: usize, count: usize) -> Vec<usize> {
 
 const WINDOW: usize = 1024;
 const HOP: usize = 256;
+const LEAD: usize = WINDOW / 2;
 
 pub fn onset_markers(mono: &[f32], sample_rate: u32, sensitivity: f32) -> Vec<usize> {
-    let flux = spectral_flux(mono);
-    let peak = flux.iter().cloned().fold(0.0f32, f32::max);
-    if peak <= 1e-6 {
+    let flux = band_flux(mono, sample_rate);
+    if flux.is_empty() {
         return Vec::new();
     }
-    let flux: Vec<f32> = flux.iter().map(|f| f / peak).collect();
     let delta = 0.02 + (1.0 - sensitivity.clamp(0.0, 1.0)) * 0.5;
-    let min_gap = (sample_rate as usize / 20) / HOP;
+    let min_gap = ((sample_rate as usize / 20) / HOP).max(1);
     let mut found: Vec<usize> = Vec::new();
     let mut last: Option<usize> = None;
     for i in 0..flux.len() {
@@ -62,40 +61,73 @@ pub fn onset_markers(mono: &[f32], sample_rate: u32, sensitivity: f32) -> Vec<us
         if flux[i] < local_median(&flux, i, 16) + delta {
             continue;
         }
-        if last.is_some_and(|l| i - l < min_gap.max(1)) {
+        if last.is_some_and(|l| i - l < min_gap) {
             continue;
         }
         last = Some(i);
-        found.push(refine(mono, i * HOP));
+        found.push(refine(mono, (i * HOP).saturating_sub(LEAD)));
     }
     found
 }
 
-fn spectral_flux(mono: &[f32]) -> Vec<f32> {
-    if mono.len() < WINDOW {
+const BAND_EDGES_HZ: [f32; 4] = [0.0, 200.0, 1_000.0, 4_000.0];
+const QUIET_BAND: f32 = 0.05;
+
+fn band_flux(mono: &[f32], sample_rate: u32) -> Vec<f32> {
+    let bins = WINDOW / 2;
+    let hz_per_bin = sample_rate as f32 / WINDOW as f32;
+    let mut edges: Vec<usize> = BAND_EDGES_HZ.iter().map(|hz| ((hz / hz_per_bin) as usize).min(bins)).collect();
+    edges.push(bins);
+    let bands = edges.len() - 1;
+    let per_band = spectral_flux(mono, &edges);
+    let peaks: Vec<f32> = (0..bands).map(|b| per_band.iter().map(|f| f[b]).fold(0.0, f32::max)).collect();
+    let loudest = peaks.iter().cloned().fold(0.0, f32::max);
+    if loudest <= 1e-6 {
         return Vec::new();
     }
+    per_band
+        .iter()
+        .map(|frame| {
+            (0..bands)
+                .filter(|&b| peaks[b] >= loudest * QUIET_BAND)
+                .map(|b| frame[b] / peaks[b])
+                .fold(0.0, f32::max)
+        })
+        .collect()
+}
+
+fn spectral_flux(mono: &[f32], edges: &[usize]) -> Vec<Vec<f32>> {
     let fft = FftPlanner::<f32>::new().plan_fft_forward(WINDOW);
     let hann: Vec<f32> = (0..WINDOW)
         .map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / WINDOW as f32).cos())
         .collect();
-    let mut prev = vec![0.0f32; WINDOW / 2];
+    let bins = WINDOW / 2;
+    let mut prev = vec![0.0f32; bins];
     let mut buf = vec![Complex::new(0.0f32, 0.0); WINDOW];
-    let mut flux = Vec::with_capacity(mono.len() / HOP);
-    let mut pos = 0;
-    while pos + WINDOW <= mono.len() {
+    let mut flux = Vec::with_capacity(mono.len() / HOP + 1);
+    let mut start = -(LEAD as isize);
+    while start < mono.len() as isize {
         for (i, c) in buf.iter_mut().enumerate() {
-            *c = Complex::new(mono[pos + i] * hann[i], 0.0);
+            let at = start + i as isize;
+            let x = if at >= 0 { mono.get(at as usize).copied().unwrap_or(0.0) } else { 0.0 };
+            *c = Complex::new(x * hann[i], 0.0);
         }
         fft.process(&mut buf);
-        let mut sum = 0.0;
-        for (k, p) in prev.iter_mut().enumerate() {
-            let mag = (1.0 + buf[k].norm()).ln();
-            sum += (mag - *p).max(0.0);
-            *p = mag;
-        }
-        flux.push(sum);
-        pos += HOP;
+        let mags: Vec<f32> = buf[..bins].iter().map(|c| (1.0 + c.norm()).ln()).collect();
+        let frame: Vec<f32> = edges
+            .windows(2)
+            .map(|band| {
+                (band[0]..band[1])
+                    .map(|k| {
+                        let reference = prev[k.saturating_sub(2)..(k + 3).min(bins)].iter().cloned().fold(0.0f32, f32::max);
+                        (mags[k] - reference).max(0.0)
+                    })
+                    .sum()
+            })
+            .collect();
+        prev = mags;
+        flux.push(frame);
+        start += HOP as isize;
     }
     flux
 }
@@ -205,5 +237,62 @@ mod tests {
         let loose = onset_markers(&s, sr, 0.9).len();
         let strict = onset_markers(&s, sr, 0.1).len();
         assert!(strict < loose, "strict {strict} loose {loose}");
+    }
+
+    fn kicks(at: &[usize], frames: usize) -> Vec<f32> {
+        let mut s = vec![0.0f32; frames];
+        for &p in at {
+            for i in 0..29_000.min(frames - p) {
+                let t = i as f32 / 44_100.0;
+                let f = 50.0 + 80.0 * (-t * 30.0).exp();
+                s[p + i] += (2.0 * std::f32::consts::PI * f * t).sin() * (-t * 8.0).exp() * 0.9;
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn detects_low_kicks_between_bright_hits() {
+        let sr = 44_100;
+        let mut s = kicks(&[0, 29_400], 58_800);
+        let hats = clicks(sr, &[14_700, 44_100], 58_800);
+        for (a, b) in s.iter_mut().zip(hats) {
+            *a += b * 0.3;
+        }
+        let found = onset_markers(&s, sr, 0.5);
+        for want in [0, 14_700, 29_400, 44_100] {
+            assert!(found.iter().any(|f| f.abs_diff(want) < 1024), "missing {want} in {found:?}");
+        }
+    }
+
+    #[test]
+    fn falling_kick_pitch_is_not_a_new_onset() {
+        let found = onset_markers(&kicks(&[0, 29_400], 58_800), 44_100, 0.5);
+        assert_eq!(found.len(), 2, "{found:?}");
+    }
+
+    fn snares(at: &[usize], frames: usize) -> Vec<f32> {
+        let mut s = vec![0.0f32; frames];
+        let mut seed: u32 = 1;
+        for &p in at {
+            for i in 0..12_000.min(frames - p) {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0;
+                s[p + i] += noise * (-(i as f32) / 44_100.0 * 18.0).exp() * 0.8;
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn detects_kicks_next_to_loud_snares() {
+        let mut s = kicks(&[0, 29_400], 58_800);
+        for (a, b) in s.iter_mut().zip(snares(&[14_700, 44_100], 58_800)) {
+            *a += b;
+        }
+        let found = onset_markers(&s, 44_100, 0.5);
+        for want in [0, 14_700, 29_400, 44_100] {
+            assert!(found.iter().any(|f| f.abs_diff(want) < 1024), "missing {want} in {found:?}");
+        }
     }
 }
