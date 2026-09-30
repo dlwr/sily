@@ -243,6 +243,15 @@ impl Engine {
                 self.click_age = Some(0);
             }
         }
+        self.limit(frames);
+    }
+
+    fn limit(&mut self, frames: usize) {
+        for ch in &mut self.out {
+            for s in &mut ch[..frames] {
+                *s = soft_clip(*s);
+            }
+        }
     }
 
     fn beats_per_second(&self) -> f64 {
@@ -373,6 +382,15 @@ impl Engine {
 
     pub fn output(&self, channel: usize) -> &[f32] {
         &self.out[channel]
+    }
+}
+
+fn soft_clip(x: f32) -> f32 {
+    const KNEE: f32 = 0.8;
+    if x.abs() <= KNEE {
+        x
+    } else {
+        x.signum() * (KNEE + (1.0 - KNEE) * ((x.abs() - KNEE) / (1.0 - KNEE)).tanh())
     }
 }
 
@@ -611,5 +629,24 @@ mod tests {
         let out = render(&mut e, 1200);
         assert_eq!(first_sound(&out), Some(0));
         assert_eq!(first_sound(&out[500..]).map(|i| i + 500), Some(1000));
+    }
+
+    #[test]
+    fn stacked_voices_never_exceed_full_scale() {
+        let mut e = engine_with(vec![1.0; 1000]);
+        e.set_markers((0..16).map(|i| i * 10).collect());
+        for pad in 0..16 {
+            e.trigger(pad, 1.0);
+        }
+        let out = render(&mut e, 20);
+        assert!(out.iter().all(|s| s.abs() <= 1.0), "{:?}", out);
+    }
+
+    #[test]
+    fn quiet_signals_pass_unchanged() {
+        let mut e = engine_with(vec![0.6; 1000]);
+        e.trigger(0, 1.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - 0.6).abs() < 1e-6);
     }
 }
