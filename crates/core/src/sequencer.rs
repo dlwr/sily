@@ -6,6 +6,8 @@ pub struct Event {
     pub pad: u8,
     pub velocity: f32,
     pub nudge: f64,
+    #[serde(default)]
+    pub pitch: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -115,7 +117,7 @@ mod tests {
     use super::*;
 
     fn ev(beat: f64, pad: u8) -> Event {
-        Event { beat, pad, velocity: 1.0, nudge: 0.0 }
+        Event { beat, pad, velocity: 1.0, nudge: 0.0, pitch: 0.0 }
     }
 
     fn collect(p: &Pattern, start: f64, span: f64) -> Vec<(f64, u8)> {
