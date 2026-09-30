@@ -66,8 +66,8 @@
             class:auto={ev.auto}
             class:stand-in={ev.auto && ev.standIn}
             style:left={pct(ev.beat + ev.nudge)}
-            style:opacity={0.4 + ev.velocity * 0.6}
-            title="ドラッグでずらす / ホイールで音程 / 右クリックで削除"
+            style:opacity={0.25 + ev.velocity * 0.75}
+            title="ドラッグでずらす / ホイールで音程 / Alt+ホイールで強さ / 右クリックで削除"
             role="gridcell"
             tabindex="-1"
             onpointerdown={(e) => onEventDown(e, ev.id)}
@@ -75,7 +75,8 @@
             onpointerup={() => (drag = null)}
             onwheel={(e) => {
               e.preventDefault()
-              session.shiftPitch(ev.id, e.deltaY < 0 ? 1 : -1)
+              if (e.altKey) session.changeVelocity(ev.id, e.deltaY < 0 ? 0.05 : -0.05)
+              else session.shiftPitch(ev.id, e.deltaY < 0 ? 1 : -1)
             }}
           >{#if ev.pitch !== 0}<span class="pitch num">{ev.pitch > 0 ? '+' : ''}{ev.pitch}</span>{/if}</span>
         {/each}
@@ -85,7 +86,7 @@
   <div class="playhead" style:left="calc(28px + (100% - 28px) * {session.beat / session.lengthBeats})"></div>
 </div>
 <div class="footer">
-  <span class="muted">枠だけのノートは自動で組んだもの（点線は、足りない役を近い音で代役させたもの） / 空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
+  <span class="muted">枠だけのノートは自動で組んだもの（点線は、足りない役を近い音で代役させたもの） / 空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程・Alt+ホイールで強さ / 右クリックで削除</span>
   <div class="actions">
     <select bind:value={loops} title="書き出す周回数">
       {#each [1, 4, 8] as n}<option value={n}>{n}周</option>{/each}

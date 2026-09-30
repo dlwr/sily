@@ -5,7 +5,7 @@ import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
-import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { frameAt } from './timing'
@@ -631,6 +631,13 @@ export class Session {
     this.checkpoint(`pitch:${id}`)
     this.adopt()
     this.events = shiftPitch(this.events, id, delta)
+    this.syncEvents()
+  }
+
+  changeVelocity(id: string, delta: number) {
+    this.checkpoint(`velocity:${id}`)
+    this.adopt()
+    this.events = changeVelocity(this.events, id, delta)
     this.syncEvents()
   }
 
