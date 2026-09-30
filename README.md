@@ -30,3 +30,16 @@ pnpm dev
 | `Tab` | 鍵盤モード（選択中のパッドを音階で弾く。録音中ならピッチ付きで入る） |
 
 パターン上のノートはホイールで半音ずつ上下する。
+
+## 分類器の学習
+
+スライスの種類（キック、スネアなど）は、学習済みモデル（`web/src/classify/model.json`）があればそれで、なければルールで判定する。
+
+```sh
+echo "FREESOUND_API_KEY=..." > .env
+uv run tools/train/fetch.py --per-class 300
+cargo build -p sily-tools --release
+uv run tools/train/train.py tmp/train/freesound --corrections ~/Downloads/sily-corrections.json
+```
+
+`--corrections` には、アプリの「直したラベルを書き出す」で保存した JSON を渡せる。
