@@ -1,4 +1,6 @@
-export type PadEvent = { id: string; beat: number; pad: number; velocity: number; nudge: number }
+export type PadEvent = { id: string; beat: number; pad: number; velocity: number; nudge: number; pitch: number }
+
+const PITCH_RANGE = 24
 
 let sequence = 0
 const nextId = () => `e${++sequence}`
@@ -7,15 +9,20 @@ export const toggleStep = (events: PadEvent[], pad: number, beat: number, tolera
   const onStep = (e: PadEvent) => e.pad === pad && Math.abs(e.beat - beat) < tolerance
   return events.some(onStep)
     ? events.filter((e) => !onStep(e))
-    : [...events, { id: nextId(), beat, pad, velocity: 1, nudge: 0 }]
+    : [...events, { id: nextId(), beat, pad, velocity: 1, nudge: 0, pitch: 0 }]
 }
 
-export const recordHit = (events: PadEvent[], pad: number, beat: number, velocity: number): PadEvent[] => [
+export const recordHit = (events: PadEvent[], pad: number, beat: number, velocity: number, pitch = 0): PadEvent[] => [
   ...events,
-  { id: nextId(), beat, pad, velocity, nudge: 0 },
+  { id: nextId(), beat, pad, velocity, nudge: 0, pitch },
 ]
 
 export const nudgeEvent = (events: PadEvent[], id: string, delta: number): PadEvent[] =>
   events.map((e) => (e.id === id ? { ...e, nudge: e.nudge + delta } : e))
 
 export const removeEvent = (events: PadEvent[], id: string): PadEvent[] => events.filter((e) => e.id !== id)
+
+export const shiftPitch = (events: PadEvent[], id: string, delta: number): PadEvent[] =>
+  events.map((e) =>
+    e.id === id ? { ...e, pitch: Math.max(-PITCH_RANGE, Math.min(PITCH_RANGE, e.pitch + delta)) } : e,
+  )
