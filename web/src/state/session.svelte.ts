@@ -512,7 +512,8 @@ export class Session {
         const current = this.labels[start]
         if (current && !current.manual) this.labels[start] = { ...current, ...result }
       }
-    } catch {
+    } catch (error) {
+      console.error(error)
       this.message = 'うわもの判定のモデルを読み込めなかった'
     } finally {
       if (generation === this.refineGeneration) this.refining = false
