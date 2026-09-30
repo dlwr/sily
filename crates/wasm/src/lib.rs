@@ -13,6 +13,7 @@ static mut MODEL: Option<Model> = None;
 static mut QUEUE: Vec<Event> = Vec::new();
 static mut RESULT_FEATURES: Vec<f32> = Vec::new();
 static mut RESULT_CONFIDENCE: f32 = 0.0;
+static mut RESULT_SCORES: [f32; 15] = [0.0; 15];
 
 #[allow(static_mut_refs)]
 fn engine() -> &'static mut Engine {
@@ -244,6 +245,16 @@ pub unsafe extern "C" fn classify_slice(mono: *const f32, frames: u32, sample_ra
     let prediction = classify(&features, MODEL.as_ref());
     RESULT_FEATURES = features.to_vec();
     RESULT_CONFIDENCE = prediction.confidence;
+    RESULT_SCORES = [0.0; 15];
+    let scores = match MODEL.as_ref() {
+        Some(model) => model.probabilities(&features),
+        None => vec![(prediction.category, prediction.confidence)],
+    };
+    for (category, p) in scores {
+        if let Some(i) = CATEGORIES.iter().position(|c| *c == category) {
+            RESULT_SCORES[i] = p;
+        }
+    }
     CATEGORIES.iter().position(|c| *c == prediction.category).unwrap_or(8) as u32
 }
 
@@ -280,4 +291,10 @@ pub extern "C" fn engine_queue_add(beat: f64, pad: u32, velocity: f32, nudge: f6
 #[allow(static_mut_refs)]
 pub extern "C" fn engine_queue_commit() {
     engine().queue_events(unsafe { std::mem::take(&mut QUEUE) });
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn result_scores() -> *const f32 {
+    unsafe { RESULT_SCORES.as_ptr() }
 }
