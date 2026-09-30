@@ -24,6 +24,7 @@
   },
   "packageManager": "pnpm@10.26.2",
   "dependencies": {
-    "@huggingface/transformers": "^4.3.0"
+    "@huggingface/transformers": "^4.3.0",
+    "fflate": "^0.8.3"
   }
 }

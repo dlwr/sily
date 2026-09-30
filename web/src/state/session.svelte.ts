@@ -6,7 +6,8 @@ import { ClapClient } from '../classify/clapClient'
 import { resample } from '../classify/clap'
 import { DEFAULT_FX, type FxSettings } from '../fx/fx'
 import { newId } from '../storage/db'
-import { deleteSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
+import { pack, unpack } from '../storage/bundle'
+import { deleteSample, importSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
 import {
   deleteProject,
   listProjects,
@@ -310,6 +311,47 @@ export class Session {
     this.lastSaved = JSON.stringify(this.projectState())
   }
 
+  async exportProject() {
+    await this.flushSave()
+    const ids = [...new Set(this.pads.flatMap((p) => (p.sample ? [p.sample.id] : [])))]
+    const samples = (await Promise.all(ids.map((id) => loadSample(id)))).flatMap((s) => (s ? [s] : []))
+    const bytes = pack({
+      project: { name: this.projectName, state: JSON.parse(JSON.stringify(this.projectState())) },
+      source: this.sample && {
+        name: this.sample.name,
+        sampleRate: this.sampleRate,
+        left: this.sample.left,
+        right: this.sample.right,
+      },
+      samples,
+    })
+    download(new Blob([bytes.slice()], { type: 'application/zip' }), `${this.projectName}.sily`)
+  }
+
+  async importProject(file: File) {
+    try {
+      const bundle = unpack(new Uint8Array(await file.arrayBuffer()))
+      for (const sample of bundle.samples) await importSample(sample)
+      const source = bundle.source
+      const sourceId = source ? await saveSource(source.left, source.right, source.sampleRate) : null
+      const id = newId()
+      await saveProject({
+        id,
+        name: bundle.project.name,
+        version: 1,
+        updatedAt: 0,
+        sourceId,
+        sourceName: source?.name ?? null,
+        state: bundle.project.state,
+      })
+      await this.refreshProjects()
+      await this.refreshLibrary()
+      await this.openProject(id)
+    } catch {
+      this.message = `${file.name} をプロジェクトとして読み込めなかった`
+    }
+  }
+
   async removeProject(id: string) {
     await deleteProject(id)
     if (id === this.projectId) {
@@ -334,6 +376,7 @@ export class Session {
 
   async loadFile(file: File) {
     if (!this.sily) return
+    if (file.name.endsWith('.sily')) return this.importProject(file)
     const token = ++this.loadToken
     try {
       const { left, right } = await this.sily.decode(file)
