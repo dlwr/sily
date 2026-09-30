@@ -31,6 +31,12 @@ export type SilyExports = {
   pitch_shift(left: number, right: number, frames: number, sampleRate: number, semitones: number): number
   stretch(left: number, right: number, frames: number, sampleRate: number, ratio: number): number
   result_audio(channel: number): number
+  engine_set_pad_slice(pad: number, slice: number): void
+  classifier_load(json: number, len: number): number
+  classify_slice(mono: number, frames: number, sampleRate: number): number
+  result_confidence(): number
+  result_features(): number
+  result_features_len(): number
 }
 
 export const instantiate = (module: WebAssembly.Module, now: () => number): SilyExports => {

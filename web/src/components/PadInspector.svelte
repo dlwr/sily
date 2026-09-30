@@ -1,15 +1,28 @@
 <script lang="ts">
+  import { CATEGORIES, CATEGORY_LABELS, type Category } from '../classify/categories'
   import type { Session } from '../state/session.svelte'
 
   let { session }: { session: Session } = $props()
 
   const pad = $derived(session.pads[session.selectedPad])
+  const label = $derived(session.labelOf(session.selectedPad))
   const semitones = $derived(Math.round(pad.pitch))
   const cents = $derived(Math.round((pad.pitch - semitones) * 100))
 </script>
 
 <section>
   <h2>パッド {session.selectedPad + 1}</h2>
+  <label>
+    種類
+    <select
+      value={label?.category ?? ''}
+      disabled={!label}
+      onchange={(e) => session.setLabel(session.selectedPad, e.currentTarget.value as Category)}
+    >
+      {#each CATEGORIES as c}<option value={c}>{CATEGORY_LABELS[c]}</option>{/each}
+    </select>
+    <span class="num muted">{label ? (label.manual ? '手動' : `${Math.round(label.confidence * 100)}%`) : ''}</span>
+  </label>
   <label>
     ピッチ
     <input
@@ -56,6 +69,10 @@
   </div>
   <button aria-pressed={pad.reverse} onclick={() => session.setPad(session.selectedPad, { reverse: !pad.reverse })}>
     逆再生
+  </button>
+  <button onclick={() => session.arrangePads()} disabled={!session.sample}>定番の配置に並べ替える</button>
+  <button onclick={() => session.exportCorrections()} disabled={session.correctionCount === 0}>
+    直したラベルを書き出す（{session.correctionCount}）
   </button>
   <button aria-pressed={session.keyboardMode} onclick={() => (session.keyboardMode = !session.keyboardMode)}>
     鍵盤モード <kbd>Tab</kbd>

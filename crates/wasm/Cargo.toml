@@ -11,3 +11,4 @@ crate-type = ["cdylib"]
 sily-core = { path = "../core" }
 timestretch = "0.15"
 stratum-dsp = "1"
+serde_json = "1"

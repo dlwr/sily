@@ -1,14 +1,19 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
 import type { ToWorklet } from '../audio/messages'
+import { arrangePads, remapEvents, type Category } from '../classify/categories'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { frameAt } from './timing'
 
 export type PadSettings = { pitch: number; gain: number; stretch: boolean; reverse: boolean }
+export type Label = { category: Category; confidence: number; manual: boolean }
 export type Sample = { name: string; left: Float32Array; right: Float32Array; mono: Float32Array }
 
 const PADS = 16
+const CORRECTIONS_KEY = 'sily.corrections'
+const CLASSIFY_DELAY_MS = 150
+const identity = () => Array.from({ length: PADS }, (_, i) => i)
 const EXPORT_TAIL_SECONDS = 2
 const SILENCE = 1e-4
 
@@ -38,12 +43,17 @@ export class Session {
   message = $state('')
   sourceSpeed = $state<SourceSpeed>({ mode: 'tape', rate: 1 })
   sourceBpm = $state<number | null>(null)
+  padSlices = $state<number[]>(identity())
+  labels = $state<Record<number, Label>>({})
+  correctionCount = $state(readCorrections().length)
 
   private lastTick = { frame: 0, time: 0 }
   private capture: Capture | null = null
   private map = new SourceMap(1, 1)
   private engineSample: { left: Float32Array; right: Float32Array } | null = null
   private loadedStretch: number | null = null
+  private features = new Map<number, number[]>()
+  private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
   get lengthBeats() {
@@ -90,11 +100,15 @@ export class Session {
     this.loadEngineSample(left, right, null)
     this.sily.send({ type: 'sourceRate', rate: 1 })
     this.markers = []
+    this.labels = {}
+    this.features.clear()
+    this.padSlices = identity()
     this.pads.forEach((p) => (p.stretch = false))
     this.stretched.clear()
     this.events = []
     this.syncEvents()
     this.message = ''
+    this.classifySlices()
   }
 
   async toggleCapture(source: { device: string | undefined } | 'display') {
@@ -172,8 +186,77 @@ export class Session {
   setMarkers(markers: number[]) {
     const len = this.sample?.left.length ?? 0
     this.markers = [...new Set(markers.map((m) => Math.max(0, Math.min(len - 1, Math.round(m)))))].sort((a, b) => a - b)
+    this.padSlices = identity()
     this.sendMarkers()
     this.invalidateStretched()
+    this.classifySlices()
+  }
+
+  labelOf(pad: number): Label | null {
+    const start = this.sliceStart(this.padSlices[pad])
+    return start === null ? null : (this.labels[start] ?? null)
+  }
+
+  setLabel(pad: number, category: Category) {
+    const start = this.sliceStart(this.padSlices[pad])
+    if (start === null) return
+    this.labels[start] = { category, confidence: 1, manual: true }
+    const features = this.features.get(start)
+    if (features) {
+      const corrections = [...readCorrections(), { features, label: category }]
+      writeCorrections(corrections)
+      this.correctionCount = corrections.length
+    }
+  }
+
+  exportCorrections() {
+    download(new Blob([JSON.stringify(readCorrections())], { type: 'application/json' }), 'sily-corrections.json')
+  }
+
+  arrangePads() {
+    const before = this.padSlices
+    const after = arrangePads(before, (slice) => {
+      const start = this.sliceStart(slice)
+      return start === null ? null : (this.labels[start]?.category ?? null)
+    })
+    this.pads = after.map((slice) => this.pads[before.indexOf(slice)])
+    this.events = remapEvents(this.events, before, after)
+    this.padSlices = after
+    this.selectedPad = after.indexOf(before[this.selectedPad])
+    this.sily?.send({ type: 'padSlices', slices: [...after] })
+    this.pads.forEach((p, pad) => this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse }))
+    this.syncEvents()
+    this.invalidateStretched()
+  }
+
+  private sliceStart(slice: number): number | null {
+    if (!this.sample) return null
+    if (this.markers.length === 0) return slice === 0 ? 0 : null
+    return this.markers[slice] ?? null
+  }
+
+  private classifySlices() {
+    clearTimeout(this.classifyTimer)
+    this.classifyTimer = setTimeout(() => this.classifyNow(), CLASSIFY_DELAY_MS)
+  }
+
+  private classifyNow() {
+    if (!this.sily || !this.sample) return
+    const count = Math.max(1, this.markers.length)
+    const labels: Record<number, Label> = {}
+    for (let slice = 0; slice < Math.min(count, PADS); slice++) {
+      const start = this.sliceStart(slice)!
+      const end = this.markers[slice + 1] ?? this.sample.left.length
+      const previous = this.labels[start]
+      if (previous?.manual) {
+        labels[start] = previous
+        continue
+      }
+      const result = this.sily.classify(this.sample.mono.subarray(start, end))
+      this.features.set(start, result.features)
+      labels[start] = { category: result.category, confidence: result.confidence, manual: false }
+    }
+    this.labels = labels
   }
 
   setSourceSpeed(patch: Partial<SourceSpeed>) {
@@ -219,10 +302,11 @@ export class Session {
 
   sliceRange(pad: number): [number, number] | null {
     if (!this.sample) return null
+    const slice = this.padSlices[pad]
     const len = this.sample.left.length
-    if (this.markers.length === 0) return pad === 0 ? [0, len] : null
-    if (pad >= this.markers.length) return null
-    return [this.markers[pad], this.markers[pad + 1] ?? len]
+    if (this.markers.length === 0) return slice === 0 ? [0, len] : null
+    if (slice >= this.markers.length) return null
+    return [this.markers[slice], this.markers[slice + 1] ?? len]
   }
 
   padDown(pad: number, timeStamp: number, velocity = 1) {
@@ -308,12 +392,7 @@ export class Session {
     const { left, right } = await this.sily.renderOffline(this.snapshot(loops), loops * loopSeconds + EXPORT_TAIL_SECONDS)
     const frames = soundingLength([left, right], Math.round(loops * loopSeconds * this.sampleRate), SILENCE)
     const wav = encodeWav24(left.subarray(0, frames), right.subarray(0, frames), this.sampleRate)
-    const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${this.sample.name.replace(/\.[^.]+$/, '')}-${this.bpm}bpm-${loops}x.wav`
-    a.click()
-    URL.revokeObjectURL(url)
+    download(new Blob([wav], { type: 'audio/wav' }), `${this.sample.name.replace(/\.[^.]+$/, '')}-${this.bpm}bpm-${loops}x.wav`)
   }
 
   private snapshot(loops: number): ToWorklet[] {
@@ -322,6 +401,7 @@ export class Session {
       { type: 'load', left, right },
       { type: 'sourceRate', rate: this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1 },
       { type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) },
+      { type: 'padSlices', slices: [...this.padSlices] },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse })),
       ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),
       { type: 'groove', grid: this.grid, strength: this.strength, swing: this.swing },
@@ -355,6 +435,7 @@ export class Session {
 
   private sendMarkers() {
     this.sily?.send({ type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) })
+    this.sily?.send({ type: 'padSlices', slices: [...this.padSlices] })
   }
 
   private invalidateStretched(only?: number[]) {
@@ -409,4 +490,31 @@ export class Session {
     })
     this.fillStretched()
   }
+}
+
+type Correction = { features: number[]; label: Category }
+
+function readCorrections(): Correction[] {
+  try {
+    return JSON.parse(localStorage.getItem(CORRECTIONS_KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+function writeCorrections(corrections: Correction[]) {
+  try {
+    localStorage.setItem(CORRECTIONS_KEY, JSON.stringify(corrections))
+  } catch {
+    return
+  }
+}
+
+function download(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
 }

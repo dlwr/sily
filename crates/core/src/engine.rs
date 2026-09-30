@@ -52,6 +52,7 @@ pub struct Engine {
     sample_rate: f64,
     sample: [Vec<f32>; 2],
     markers: Vec<usize>,
+    pad_slices: [usize; PADS],
     pads: Vec<Pad>,
     voices: [Voice; VOICES],
     pattern: Pattern,
@@ -80,6 +81,7 @@ impl Engine {
             sample_rate,
             sample: [Vec::new(), Vec::new()],
             markers: Vec::new(),
+            pad_slices: std::array::from_fn(|i| i),
             pads: vec![Pad { gain: 1.0, ..Pad::default() }; PADS],
             voices: [Voice::SILENT; VOICES],
             pattern,
@@ -106,6 +108,7 @@ impl Engine {
         self.audition = None;
         self.sample = [left, right];
         self.markers.clear();
+        self.pad_slices = std::array::from_fn(|i| i);
     }
 
     pub fn set_markers(&mut self, markers: Vec<usize>) {
@@ -135,6 +138,12 @@ impl Engine {
             p.stretched.clear();
         }
         self.voices.iter_mut().filter(|v| matches!(v.source, Source::Stretched(vp, _) if vp == pad)).for_each(|v| v.sounding = false);
+    }
+
+    pub fn set_pad_slice(&mut self, pad: usize, slice: usize) {
+        if let Some(s) = self.pad_slices.get_mut(pad) {
+            *s = slice;
+        }
     }
 
     pub fn set_source_rate(&mut self, rate: f64) {
@@ -309,7 +318,7 @@ impl Engine {
             let len = p.stretched[i].1[0].len() as f64;
             return Some(Voice { source: Source::Stretched(pad, i), pos: 0.0, start: 0.0, end: len, rate: 1.0, ..base });
         }
-        let range = self.slice(pad)?;
+        let range = self.slice(*self.pad_slices.get(pad)?)?;
         let rate = semitone_rate(total) * self.source_rate;
         let (start, end) = (range.start as f64, range.end as f64);
         Some(if p.reverse {
@@ -817,5 +826,28 @@ mod tests {
         e.set_playing(true);
         let out = render(&mut e, 1400);
         assert!(out[1200].abs() > 0.1);
+    }
+
+    #[test]
+    fn pad_can_point_at_another_slice() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 300, 600]);
+        e.set_pad_slice(0, 2);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[620]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn loading_a_sample_resets_pad_slices() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_pad_slice(0, 2);
+        e.load_sample(src.clone(), src.clone());
+        e.set_markers(vec![0, 300, 600]);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[20]).abs() < 1e-4);
     }
 }

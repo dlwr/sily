@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { CATEGORY_LABELS } from '../classify/categories'
   import { padKeyLabel } from '../state/keymap'
   import type { Session } from '../state/session.svelte'
 
@@ -18,7 +19,15 @@
       >
         {#key session.hits[pad]}<span class="flash" class:on={session.hits[pad] > 0}></span>{/key}
         <span class="key">{padKeyLabel(pad)}</span>
-        <span class="num label">{pad + 1}</span>
+        <span class="bottom">
+          <span class="num label">{pad + 1}</span>
+          {#if session.labelOf(pad)}
+            {@const label = session.labelOf(pad)!}
+            <span class="category" class:unsure={!label.manual && label.confidence < 0.5}>
+              {CATEGORY_LABELS[label.category]}
+            </span>
+          {/if}
+        </span>
         {#if session.pads[pad].stretch || session.pads[pad].reverse}
           <span class="mode">{[session.pads[pad].stretch && '長', session.pads[pad].reverse && '逆'].filter(Boolean).join(' ')}</span>
         {/if}
@@ -61,6 +70,26 @@
   .key {
     font-size: 16px;
     font-weight: 700;
+  }
+
+  .bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    width: 100%;
+    gap: 4px;
+  }
+
+  .category {
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .category.unsure {
+    color: var(--muted);
   }
 
   .label {

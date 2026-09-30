@@ -33,6 +33,9 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'markers':
         withU32(w, msg.frames, (ptr) => w.engine_set_markers(ptr, msg.frames.length))
         break
+      case 'padSlices':
+        msg.slices.forEach((slice, pad) => w.engine_set_pad_slice(pad, slice))
+        break
       case 'pad':
         w.engine_set_pad(msg.pad, msg.pitch, msg.gain, msg.reverse ? 1 : 0)
         break
