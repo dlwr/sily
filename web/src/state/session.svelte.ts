@@ -62,6 +62,7 @@ export class Session {
   candidates = $state<PadEvent[][]>([])
   previewing = $state<number | null>(null)
   refining = $state(false)
+  processing = $state(0)
   private beforeGenerate: PadEvent[] | null = null
   private clap = new ClapClient()
   private refineGeneration = 0
@@ -73,6 +74,10 @@ export class Session {
   private loadedStretch: number | null = null
   private features = new Map<number, number[]>()
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
+  private sourceToken = 0
+  private stretchVersion = 0
+  private requested = new Set<string>()
+  private inflight = new Set<Promise<unknown>>()
   private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
   get lengthBeats() {
@@ -126,6 +131,9 @@ export class Session {
     this.padSlices = identity()
     this.pads.forEach((p) => (p.stretch = false))
     this.stretched.clear()
+    this.requested.clear()
+    this.stretchVersion++
+    this.sourceToken++
     this.events = []
     this.syncEvents()
     this.message = ''
@@ -505,6 +513,7 @@ export class Session {
 
   async exportWav(loops: number) {
     if (!this.sily || !this.sample) return
+    while (this.inflight.size > 0) await Promise.allSettled([...this.inflight])
     const loopSeconds = (this.lengthBeats * 60) / this.bpm
     const { left, right } = await this.sily.renderOffline(this.snapshot(loops), loops * loopSeconds + EXPORT_TAIL_SECONDS)
     const frames = soundingLength([left, right], Math.round(loops * loopSeconds * this.sampleRate), SILENCE)
@@ -528,19 +537,30 @@ export class Session {
     ]
   }
 
-  private applySource() {
+  private async applySource() {
     if (!this.sily || !this.sample) return
     const { mode, rate } = this.sourceSpeed
     const stretch = mode === 'stretch' && rate !== 1 ? rate : null
+    const token = ++this.sourceToken
     if (stretch !== this.loadedStretch) {
-      const { left, right } = this.sample
-      const out = stretch ? this.sily.stretch(left, right, 1 / stretch) : { left, right }
+      const sample = this.sample
+      const out = stretch ? await this.track(this.sily.stretch(sample.left, sample.right, 1 / stretch)) : sample
+      if (token !== this.sourceToken || sample !== this.sample) return
       this.stopAudition()
       this.loadEngineSample(out.left, out.right, stretch)
       this.sendMarkers()
     }
     this.sily.send({ type: 'sourceRate', rate: mode === 'tape' ? rate : 1 })
     this.invalidateStretched()
+  }
+
+  private track<T>(job: Promise<T>): Promise<T> {
+    this.inflight.add(job)
+    this.processing = this.inflight.size
+    return job.finally(() => {
+      this.inflight.delete(job)
+      this.processing = this.inflight.size
+    })
   }
 
   private loadEngineSample(left: Float32Array, right: Float32Array, stretch: number | null) {
@@ -556,32 +576,42 @@ export class Session {
   }
 
   private invalidateStretched(only?: number[]) {
+    this.stretchVersion++
     for (const pad of only ?? this.pads.keys()) {
       this.sily?.send({ type: 'clearStretched', pad })
       for (const key of [...this.stretched.keys()]) if (key.startsWith(`${pad}:`)) this.stretched.delete(key)
     }
+    this.requested.clear()
     this.fillStretched()
   }
 
   private fillStretched() {
     if (!this.sily || !this.engineSample) return
+    const sily = this.sily
+    const source = this.engineSample
+    const version = this.stretchVersion
     const tapeSemitones = this.sourceSpeed.mode === 'tape' ? rateToSemitones(this.sourceSpeed.rate) : 0
     this.pads.forEach((p, pad) => {
       const range = this.sliceRange(pad)
       if (!p.stretch || !range) return
       const pitches = new Set([p.pitch, ...this.events.filter((e) => e.pad === pad).map((e) => p.pitch + e.pitch)])
       const [s, e] = range.map((f) => this.map.toEngine(f))
+      const reverse = p.reverse
       for (const pitch of pitches) {
         const key = `${pad}:${Math.round(pitch * 100)}`
-        if (this.stretched.has(key)) continue
-        const { left, right } = this.engineSample!
-        const shifted = this.sily!.pitchShift(left.subarray(s, e), right.subarray(s, e), pitch + tapeSemitones)
-        if (p.reverse) {
-          shifted.left.reverse()
-          shifted.right.reverse()
-        }
-        this.stretched.set(key, { pad, pitch, left: shifted.left, right: shifted.right })
-        this.sily!.send({ type: 'stretched', pad, pitch, left: shifted.left.slice(), right: shifted.right.slice() })
+        if (this.stretched.has(key) || this.requested.has(key)) continue
+        this.requested.add(key)
+        this.track(sily.pitchShift(source.left.subarray(s, e), source.right.subarray(s, e), pitch + tapeSemitones))
+          .then((shifted) => {
+            if (version !== this.stretchVersion) return
+            if (reverse) {
+              shifted.left.reverse()
+              shifted.right.reverse()
+            }
+            this.stretched.set(key, { pad, pitch, left: shifted.left, right: shifted.right })
+            sily.send({ type: 'stretched', pad, pitch, left: shifted.left.slice(), right: shifted.right.slice() })
+          })
+          .catch(() => (this.message = '長さを保つ処理に失敗した'))
       }
     })
   }
