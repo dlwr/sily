@@ -1,5 +1,8 @@
 pub const MFCC_BANDS: usize = 13;
-pub const LEN: usize = 12 + MFCC_BANDS;
+pub const BANDS: usize = 10;
+pub const SEGMENT_LEN: usize = BANDS + 4 + MFCC_BANDS;
+const SEGMENTS: [(f32, f32); 3] = [(0.0, 0.05), (0.05, 0.25), (0.25, 1.0)];
+pub const LEN: usize = 12 + MFCC_BANDS + SEGMENTS.len() * SEGMENT_LEN + 3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Features {
@@ -16,6 +19,10 @@ pub struct Features {
     pub high: f32,
     pub pitchedness: f32,
     pub mfcc: [f32; MFCC_BANDS],
+    pub segments: Vec<f32>,
+    pub temporal_centroid: f32,
+    pub crest: f32,
+    pub pitch_hz: f32,
 }
 
 impl Features {
@@ -35,6 +42,8 @@ impl Features {
             self.pitchedness,
         ];
         v.extend_from_slice(&self.mfcc);
+        v.extend_from_slice(&self.segments);
+        v.extend_from_slice(&[self.temporal_centroid, self.crest, self.pitch_hz]);
         v
     }
 }
@@ -78,8 +87,105 @@ pub fn extract(mono: &[f32], sample_rate: u32) -> Features {
         mid: band(150.0, 2_000.0),
         high: band(2_000.0, f32::INFINITY),
         pitchedness: pitchedness(mono, sample_rate),
+        segments: segment_features(mono, sample_rate),
+        temporal_centroid: temporal_centroid(mono, sr),
+        crest: crest(mono),
+        pitch_hz: pitch_hz(mono, sample_rate),
         mfcc: mfcc(&power, sample_rate),
     }
+}
+
+const SEGMENT_FFT: usize = 1024;
+const SEGMENT_HOP: usize = 256;
+const ALIGN_BLOCK: usize = 128;
+const PRE_ROLL: usize = 64;
+
+fn aligned_start(mono: &[f32]) -> isize {
+    let peak = mono.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let first = mono.iter().position(|x| x.abs() >= peak * 0.1).unwrap_or(0);
+    first as isize - PRE_ROLL as isize
+}
+
+fn segment_features(mono: &[f32], sample_rate: u32) -> Vec<f32> {
+    use rustfft::{num_complex::Complex, FftPlanner};
+    let sr = sample_rate as f32;
+    let peak = mono.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(EPS);
+    let start = aligned_start(mono);
+    let fft = FftPlanner::<f32>::new().plan_fft_forward(SEGMENT_FFT);
+    let hann: Vec<f32> = (0..SEGMENT_FFT)
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / SEGMENT_FFT as f32).cos())
+        .collect();
+    let bins = SEGMENT_FFT / 2;
+    let hz = |k: usize| k as f32 * sr / SEGMENT_FFT as f32;
+    let edges: Vec<f32> = (0..=BANDS).map(|i| 30.0 * (20_000.0f32 / 30.0).powf(i as f32 / BANDS as f32)).collect();
+    let mut out = Vec::with_capacity(SEGMENTS.len() * SEGMENT_LEN);
+    let mut buf = vec![Complex::new(0.0f32, 0.0); SEGMENT_FFT];
+    for &(a, b) in &SEGMENTS {
+        let from = start + (a * sr) as isize;
+        let to = (start + (b * sr) as isize).min(mono.len() as isize).max(from);
+        let seg: Vec<f32> = (from..to)
+            .map(|i| if i < 0 { 0.0 } else { mono.get(i as usize).copied().unwrap_or(0.0) / peak })
+            .collect();
+        let mut power = vec![0.0f32; bins];
+        let mut frames = 0;
+        let mut pos = 0;
+        loop {
+            for (i, c) in buf.iter_mut().enumerate() {
+                *c = Complex::new(seg.get(pos + i).copied().unwrap_or(0.0) * hann[i], 0.0);
+            }
+            fft.process(&mut buf);
+            for (p, c) in power.iter_mut().zip(&buf) {
+                *p += c.norm_sqr();
+            }
+            frames += 1;
+            pos += SEGMENT_HOP;
+            if pos + SEGMENT_FFT > seg.len() {
+                break;
+            }
+        }
+        power.iter_mut().for_each(|p| *p /= frames as f32);
+        let total: f32 = power.iter().sum::<f32>() + EPS;
+        for w in edges.windows(2) {
+            let e: f32 = power.iter().enumerate().filter(|(k, _)| hz(*k) >= w[0] && hz(*k) < w[1]).map(|(_, p)| p).sum();
+            out.push(10.0 * (e / total + 1e-9).log10());
+        }
+        let energy = seg.iter().map(|x| x * x).sum::<f32>() / seg.len().max(1) as f32;
+        out.push(10.0 * (energy + 1e-12).log10());
+        let nyquist = sr / 2.0;
+        out.push(power.iter().enumerate().map(|(k, p)| hz(k) * p).sum::<f32>() / total / nyquist);
+        let log_mean = power.iter().map(|p| (p + EPS).ln()).sum::<f32>() / bins as f32;
+        out.push(log_mean.exp() / (total / bins as f32));
+        let mut acc = 0.0;
+        let roll = power.iter().position(|p| {
+            acc += p;
+            acc >= total * 0.85
+        });
+        out.push(hz(roll.unwrap_or(0)) / nyquist);
+        out.extend_from_slice(&mfcc(&power, sample_rate));
+    }
+    out
+}
+
+fn temporal_centroid(mono: &[f32], sr: f32) -> f32 {
+    let start = aligned_start(mono).max(0) as usize;
+    let (weighted, total) = mono[start..]
+        .chunks(ALIGN_BLOCK)
+        .enumerate()
+        .fold((0.0f32, 0.0f32), |(w, t), (i, c)| {
+            let e = c.iter().map(|x| x * x).sum::<f32>();
+            (w + e * i as f32, t + e)
+        });
+    weighted / (total + EPS) * ALIGN_BLOCK as f32 / sr
+}
+
+fn crest(mono: &[f32]) -> f32 {
+    let peak = mono.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let rms = (mono.iter().map(|x| x * x).sum::<f32>() / mono.len().max(1) as f32).sqrt();
+    peak / (rms + EPS)
+}
+
+fn pitch_hz(mono: &[f32], sample_rate: u32) -> f32 {
+    best_lag(mono, sample_rate).map(|(lag, _)| sample_rate as f32 / lag as f32).unwrap_or(0.0)
 }
 
 fn mean_power_spectrum(mono: &[f32], sample_rate: u32) -> Vec<f32> {
@@ -126,15 +232,19 @@ fn envelope_times(mono: &[f32], sr: f32) -> (f32, f32) {
 }
 
 fn pitchedness(mono: &[f32], sample_rate: u32) -> f32 {
+    best_lag(mono, sample_rate).map(|(_, r)| r).unwrap_or(0.0)
+}
+
+fn best_lag(mono: &[f32], sample_rate: u32) -> Option<(usize, f32)> {
     let len = WINDOW.min(mono.len());
     if len < 64 {
-        return 0.0;
+        return None;
     }
     let start = ((mono.len() - len) / 4).min(mono.len() - len);
     let seg = &mono[start..start + len];
     let energy: f32 = seg.iter().map(|x| x * x).sum();
     if energy <= EPS {
-        return 0.0;
+        return None;
     }
     let min_lag = (sample_rate / 2_000).max(1) as usize;
     let max_lag = ((sample_rate / 40) as usize).min(len / 2);
@@ -143,9 +253,10 @@ fn pitchedness(mono: &[f32], sample_rate: u32) -> f32 {
             let (a, b) = (&seg[..len - lag], &seg[lag..]);
             let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
             let norm = (a.iter().map(|x| x * x).sum::<f32>() * b.iter().map(|y| y * y).sum::<f32>()).sqrt();
-            dot / (norm + EPS)
+            (lag, dot / (norm + EPS))
         })
-        .fold(0.0, f32::max)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|(_, r)| *r > 0.0)
 }
 
 fn mfcc(power: &[f32], sample_rate: u32) -> [f32; MFCC_BANDS] {
@@ -293,5 +404,29 @@ mod tests {
             })
             .collect();
         assert!(extract(&chord, SR).decay > 0.8, "{}", extract(&chord, SR).decay);
+    }
+
+    #[test]
+    fn leading_silence_does_not_change_the_segments() {
+        let hit = decaying(noise(0.5), 20.0);
+        let mut late = vec![0.0; 4410];
+        late.extend_from_slice(&hit);
+        let (a, b) = (extract(&hit, SR).segments, extract(&late, SR).segments);
+        let diff = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        let worst = a.iter().zip(&b).enumerate().max_by(|x, y| (x.1 .0 - x.1 .1).abs().total_cmp(&(y.1 .0 - y.1 .1).abs())).unwrap();
+        assert!(diff < 0.5, "max diff {diff} at {worst:?}");
+    }
+
+    #[test]
+    fn segment_bands_find_a_sub_bass_in_the_body() {
+        let segments = extract(&sine(50.0, 0.5), SR).segments;
+        let body_bands = &segments[SEGMENT_LEN..SEGMENT_LEN + BANDS];
+        let loudest = body_bands.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        assert_eq!(loudest, 0);
+    }
+
+    #[test]
+    fn segments_of_silence_are_finite() {
+        assert!(extract(&vec![0.0; 4410], SR).segments.iter().all(|v| v.is_finite()));
     }
 }

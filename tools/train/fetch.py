@@ -68,6 +68,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
     key = api_key()
+    labelled = {int(p.stem): p.parent.name for p in OUT.glob("*/*.mp3")}
     seen: set[int] = set()
     manifest = []
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
@@ -80,7 +81,8 @@ def main() -> None:
                 while len(picked) < args.per_class:
                     data = search(key, query, page)
                     for sound in data["results"]:
-                        if len(picked) < args.per_class and sound["id"] not in seen:
+                        elsewhere = labelled.get(sound["id"]) not in (None, label)
+                        if len(picked) < args.per_class and sound["id"] not in seen and not elsewhere:
                             seen.add(sound["id"])
                             picked.append(sound)
                     if not data.get("next"):
