@@ -143,9 +143,7 @@
       canvas.style.cursor = markerNear(e.offsetX) !== null ? 'ew-resize' : 'crosshair'
       return
     }
-    const to = frameOfX(e.offsetX)
-    session.moveMarker(dragging, to)
-    dragging = to
+    dragging = session.moveMarker(dragging, frameOfX(e.offsetX))
   }
 </script>
 
