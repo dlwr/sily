@@ -10,7 +10,14 @@ import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './sour
 import { History } from './history'
 import { frameAt } from './timing'
 
-export type PadSettings = { pitch: number; gain: number; stretch: boolean; reverse: boolean }
+export type PadSettings = {
+  pitch: number
+  gain: number
+  stretch: boolean
+  reverse: boolean
+  choke: number
+  chokeAuto: boolean
+}
 export type Label = {
   category: Category
   confidence: number
@@ -31,6 +38,7 @@ const PADS = 16
 const CORRECTIONS_KEY = 'sily.corrections'
 const CLASSIFY_DELAY_MS = 150
 const MAX_CLASSIFIED = 128
+const HAT_CHOKE = 1
 const CANDIDATES = 4
 const CLAP_MAX_SECONDS = 10
 const UPPER_KINDS: Category[] = ['keys', 'vocal', 'melody', 'fx']
@@ -43,7 +51,7 @@ export class Session {
   sample = $state.raw<Sample | null>(null)
   markers = $state<number[]>([])
   pads = $state<PadSettings[]>(
-    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false })),
+    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true })),
   )
   selectedPad = $state(0)
   events = $state<PadEvent[]>([])
@@ -250,6 +258,7 @@ export class Session {
     const start = this.sliceStart(this.padSlices[pad])
     if (start === null) return
     this.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
+    this.autoChoke()
     const features = this.features.get(start)
     if (features) {
       const corrections = [...readCorrections(), { features, label: category }]
@@ -302,12 +311,13 @@ export class Session {
 
   private applyPadSlices(after: number[]) {
     const before = this.padSlices
-    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false })
+    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true })
     this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
     this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
     this.padSlices = after
+    this.autoChoke()
     this.sily?.send({ type: 'padSlices', slices: [...after] })
-    this.pads.forEach((p, pad) => this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse }))
+    this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
     this.invalidateStretched()
   }
@@ -325,6 +335,22 @@ export class Session {
   redo() {
     const next = this.history.redo(this.doc())
     if (next) this.restore(next)
+  }
+
+  private sendPad(pad: number) {
+    const p = this.pads[pad]
+    this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })
+  }
+
+  private autoChoke() {
+    this.pads.forEach((p, pad) => {
+      if (!p.chokeAuto) return
+      const category = this.labelOf(pad)?.category
+      const choke = category === 'closed_hat' || category === 'open_hat' ? HAT_CHOKE : 0
+      if (choke === p.choke) return
+      p.choke = choke
+      this.sendPad(pad)
+    })
   }
 
   private checkpoint(key?: string) {
@@ -350,7 +376,7 @@ export class Session {
     this.labels = doc.labels
     this.kitPending = false
     this.sendMarkers()
-    this.pads.forEach((p, pad) => this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse }))
+    this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
     this.invalidateStretched()
   }
@@ -450,6 +476,7 @@ export class Session {
       this.kitPending = false
       this.applyKit()
     }
+    this.autoChoke()
     this.refineUpper()
   }
 
@@ -556,8 +583,8 @@ export class Session {
   setPad(pad: number, patch: Partial<PadSettings>) {
     this.checkpoint(`pad:${pad}:${Object.keys(patch).join()}`)
     Object.assign(this.pads[pad], patch)
-    const p = this.pads[pad]
-    this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse })
+    this.sendPad(pad)
+    if ('chokeAuto' in patch) this.autoChoke()
     if ('stretch' in patch || 'reverse' in patch) this.invalidateStretched([pad])
     else if ('pitch' in patch) this.fillStretched()
   }
@@ -638,7 +665,7 @@ export class Session {
       { type: 'sourceRate', rate: this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1 },
       { type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) },
       { type: 'padSlices', slices: [...this.padSlices] },
-      ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse })),
+      ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
       ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),
       { type: 'groove', grid: this.grid, strength: this.strength, swing: this.swing },
       { type: 'events', events: this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch })) },

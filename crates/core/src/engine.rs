@@ -10,6 +10,7 @@ struct Pad {
     pitch: f64,
     gain: f32,
     reverse: bool,
+    choke: Option<u8>,
     stretched: Vec<(i64, [Vec<f32>; 2])>,
 }
 
@@ -140,6 +141,12 @@ impl Engine {
             p.stretched.clear();
         }
         self.voices.iter_mut().filter(|v| matches!(v.source, Source::Stretched(vp, _) if vp == pad)).for_each(|v| v.sounding = false);
+    }
+
+    pub fn set_choke_group(&mut self, pad: usize, group: Option<u8>) {
+        if let Some(p) = self.pads.get_mut(pad) {
+            p.choke = group;
+        }
     }
 
     pub fn set_pad_slice(&mut self, pad: usize, slice: usize) {
@@ -341,7 +348,10 @@ impl Engine {
 
     fn start_pad(&mut self, pad: usize, velocity: f32, pitch: f64) {
         let Some(voice) = self.voice_for(pad, velocity, pitch) else { return };
-        for v in self.voices.iter_mut().filter(|v| v.sounding && v.pad == Some(pad)) {
+        let group = self.pads[pad].choke;
+        let pads = &self.pads;
+        let choked = |q: usize| q == pad || (group.is_some() && pads.get(q).is_some_and(|p| p.choke == group));
+        for v in self.voices.iter_mut().filter(|v| v.sounding && v.pad.is_some_and(choked)) {
             v.release.get_or_insert(0);
         }
         self.start_voice(voice);
@@ -940,5 +950,30 @@ mod tests {
         e.set_playing(false);
         e.set_playing(true);
         assert_eq!(first_sound(&render(&mut e, 1000)), Some(500));
+    }
+
+    #[test]
+    fn a_pad_cuts_off_other_pads_in_its_choke_group() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_markers(vec![0, 500]);
+        e.set_choke_group(0, Some(1));
+        e.set_choke_group(1, Some(1));
+        e.trigger(1, 1.0, 0.0);
+        render(&mut e, 20);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[30] - 0.5).abs() < 1e-4, "{}", out[30]);
+    }
+
+    #[test]
+    fn pads_outside_the_group_keep_ringing() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_markers(vec![0, 500]);
+        e.set_choke_group(0, Some(1));
+        e.trigger(1, 1.0, 0.0);
+        render(&mut e, 20);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[30] - 1.0).abs() < 0.2, "{}", out[30]);
     }
 }
