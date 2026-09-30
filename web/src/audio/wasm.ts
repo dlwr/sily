@@ -16,6 +16,7 @@ export type SilyExports = {
   engine_set_bpm(bpm: number): void
   engine_set_playing(playing: number): void
   engine_set_metronome(on: number): void
+  engine_set_play_limit(beats: number): void
   engine_set_pattern_length(beats: number): void
   engine_set_groove(grid: number, strength: number, swing: number): void
   engine_clear_events(): void
