@@ -4,6 +4,7 @@
   let { session }: { session: Session } = $props()
 
   let confirming = $state(false)
+  let fileInput: HTMLInputElement
   let timer: ReturnType<typeof setTimeout> | undefined
 
   const remove = () => {
@@ -39,6 +40,19 @@
     {/if}
   </select>
   <button onclick={() => session.newProject()}>新規</button>
+  <button onclick={() => session.exportProject()} title="音声ごと1ファイルに書き出す">書き出し</button>
+  <button onclick={() => fileInput.click()} title=".sily ファイルを読み込む">読み込み</button>
+  <input
+    bind:this={fileInput}
+    type="file"
+    accept=".sily"
+    hidden
+    onchange={(e) => {
+      const file = e.currentTarget.files?.[0]
+      if (file) session.importProject(file)
+      e.currentTarget.value = ''
+    }}
+  />
   <button class:danger={confirming} onclick={remove}>{confirming ? '本当に削除' : '削除'}</button>
 </div>
 
