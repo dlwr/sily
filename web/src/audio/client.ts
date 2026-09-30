@@ -124,6 +124,13 @@ export class Sily {
     })
   }
 
+  chroma(mono: Float32Array): number[] {
+    const w = this.analysis
+    return withFloats(w, [mono], ([ptr]) =>
+      Array.from(new Float32Array(w.memory.buffer, w.analyze_chroma(ptr, mono.length, this.sampleRate), 12)),
+    )
+  }
+
   bpm(mono: Float32Array): number | null {
     const w = this.analysis
     const bpm = withFloats(w, [mono], ([ptr]) => w.analyze_bpm(ptr, mono.length, this.sampleRate))
