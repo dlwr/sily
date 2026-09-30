@@ -2,6 +2,8 @@ import { CATEGORIES, type Category } from '../classify/categories'
 import model from '../classify/model.json'
 import wasmUrl from '../wasm/sily.wasm?url'
 import { audibleTime } from '../state/timing'
+import type { DspJob, Stereo } from './dsp.worker'
+import { WorkerRpc } from './rpc'
 import type { FromWorklet, ToWorklet } from './messages'
 import { instantiate, withFloats, type SilyExports } from './wasm'
 import workletUrl from './worklet.ts?worker&url'
@@ -12,6 +14,9 @@ export class Sily {
   onTick: (msg: Extract<FromWorklet, { type: 'tick' }>) => void = () => {}
   onRecorded: (msg: Extract<FromWorklet, { type: 'recorded' }>) => void = () => {}
   onFailure: () => void = () => {}
+  private dsp = new WorkerRpc<DspJob, Stereo>(
+    () => new Worker(new URL('./dsp.worker.ts', import.meta.url), { type: 'module' }),
+  )
 
   private constructor(
     readonly ctx: AudioContext,
@@ -125,26 +130,17 @@ export class Sily {
     return bpm > 0 ? bpm : null
   }
 
-  pitchShift(left: Float32Array, right: Float32Array, semitones: number): { left: Float32Array; right: Float32Array } {
-    const w = this.analysis
-    return withFloats(w, [left, right], ([l, r]) => {
-      const frames = w.pitch_shift(l, r, left.length, this.sampleRate, semitones)
-      return {
-        left: new Float32Array(w.memory.buffer, w.result_audio(0), frames).slice(),
-        right: new Float32Array(w.memory.buffer, w.result_audio(1), frames).slice(),
-      }
-    })
+  pitchShift(left: Float32Array, right: Float32Array, semitones: number): Promise<Stereo> {
+    return this.runDsp('pitchShift', left, right, semitones)
   }
 
-  stretch(left: Float32Array, right: Float32Array, lengthRatio: number): { left: Float32Array; right: Float32Array } {
-    const w = this.analysis
-    return withFloats(w, [left, right], ([l, r]) => {
-      const frames = w.stretch(l, r, left.length, this.sampleRate, lengthRatio)
-      return {
-        left: new Float32Array(w.memory.buffer, w.result_audio(0), frames).slice(),
-        right: new Float32Array(w.memory.buffer, w.result_audio(1), frames).slice(),
-      }
-    })
+  stretch(left: Float32Array, right: Float32Array, lengthRatio: number): Promise<Stereo> {
+    return this.runDsp('stretch', left, right, lengthRatio)
+  }
+
+  private runDsp(op: DspJob['op'], left: Float32Array, right: Float32Array, amount: number): Promise<Stereo> {
+    const job: DspJob = { op, left: left.slice(), right: right.slice(), sampleRate: this.sampleRate, amount }
+    return this.dsp.call(job, [job.left.buffer, job.right.buffer])
   }
 
   async inputs(): Promise<MediaDeviceInfo[]> {
