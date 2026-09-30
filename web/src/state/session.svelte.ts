@@ -8,6 +8,7 @@ import { encodeWav24, soundingLength } from '../export/wav'
 import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
+import { followMarkers } from './markers'
 import { frameAt } from './timing'
 
 export type PadSettings = {
@@ -94,6 +95,7 @@ export class Session {
   private features = new Map<number, number[]>()
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
+  private loadToken = 0
   private history = new History<Doc>()
   private kitPending = false
   private stretchVersion = 0
@@ -131,9 +133,10 @@ export class Session {
 
   async loadFile(file: File) {
     if (!this.sily) return
+    const token = ++this.loadToken
     try {
       const { left, right } = await this.sily.decode(file)
-      this.setSample(file.name, left, right)
+      if (token === this.loadToken) this.setSample(file.name, left, right)
     } catch {
       this.message = `${file.name} を読み込めなかった`
     }
@@ -219,30 +222,35 @@ export class Session {
   }
 
   addMarker(frame: number) {
-    this.checkpoint()
     if (!this.sample || this.markers.includes(frame)) return
+    this.checkpoint()
     this.setMarkers([...this.markers, frame])
   }
 
   removeMarkerNear(frame: number, tolerance: number) {
-    this.checkpoint()
     const nearest = this.markers.reduce<number | null>(
       (best, m) => (Math.abs(m - frame) <= tolerance && (best === null || Math.abs(m - frame) < Math.abs(best - frame)) ? m : best),
       null,
     )
-    if (nearest !== null) this.setMarkers(this.markers.filter((m) => m !== nearest))
+    if (nearest === null) return
+    this.checkpoint()
+    this.setMarkers(this.markers.filter((m) => m !== nearest))
   }
 
-  moveMarker(from: number, to: number) {
+  moveMarker(from: number, to: number): number {
+    if (from === to || this.markers.includes(to)) return from
     this.checkpoint('move-marker')
     this.setMarkers(this.markers.map((m) => (m === from ? to : m)))
+    return to
   }
 
-  setMarkers(markers: number[]) {
+  setMarkers(markers: number[], rebuildKit = false) {
+    this.adopt()
     const len = this.sample?.left.length ?? 0
+    const before = this.markers
     this.markers = [...new Set(markers.map((m) => Math.max(0, Math.min(len - 1, Math.round(m)))))].sort((a, b) => a - b)
-    this.padSlices = identity()
-    this.kitPending = this.markers.length > PADS
+    this.padSlices = followMarkers(before, this.markers, this.padSlices)
+    this.kitPending = rebuildKit && this.markers.length > PADS
     this.sendMarkers()
     this.invalidateStretched()
     this.classifySlices()
@@ -254,9 +262,9 @@ export class Session {
   }
 
   setLabel(pad: number, category: Category) {
-    this.checkpoint()
     const start = this.sliceStart(this.padSlices[pad])
     if (start === null) return
+    this.checkpoint()
     this.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
     this.autoChoke()
     const features = this.features.get(start)
@@ -298,8 +306,8 @@ export class Session {
   }
 
   assignSliceAt(frame: number) {
-    this.checkpoint()
     if (!this.sample) return
+    this.checkpoint()
     const slice = Math.max(0, this.markers.findLastIndex((m) => m <= frame))
     const after = [...this.padSlices]
     const other = after.indexOf(slice)
@@ -310,6 +318,7 @@ export class Session {
   }
 
   private applyPadSlices(after: number[]) {
+    this.adopt()
     const before = this.padSlices
     const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true })
     this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
@@ -379,11 +388,12 @@ export class Session {
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
     this.invalidateStretched()
+    this.classifySlices()
   }
 
   generateCandidates() {
     if (!this.sample) return
-    const secondsPerFrame = 1 / this.sampleRate / (this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1)
+    const secondsPerFrame = 1 / this.sampleRate / this.sourceSpeed.rate
     const pads: PadInfo[] = []
     this.padSlices.forEach((_, pad) => {
       const range = this.sliceRange(pad)
@@ -484,18 +494,19 @@ export class Session {
     const sample = this.sample
     if (!sample) return
     const generation = ++this.refineGeneration
+    const markers = [...this.markers]
     const targets = Object.entries(this.labels)
       .filter(([, l]) => !l.manual && l.category === 'upper')
-      .map(([start]) => Number(start))
+      .map(([start]) => {
+        const from = Number(start)
+        const next = markers[markers.indexOf(from) + 1] ?? sample.left.length
+        return { start: from, end: Math.min(next, from + CLAP_MAX_SECONDS * this.sampleRate) }
+      })
+      .filter(({ start, end }) => end > start)
+    this.refining = targets.length > 0
     if (targets.length === 0) return
-    this.refining = true
     try {
-      for (const start of targets) {
-        const index = this.markers.indexOf(start)
-        const end = Math.min(
-          this.markers[index + 1] ?? sample.left.length,
-          start + CLAP_MAX_SECONDS * this.sampleRate,
-        )
+      for (const { start, end } of targets) {
         const result = await this.clap.classify(sample.mono.slice(start, end), this.sampleRate, UPPER_KINDS)
         if (generation !== this.refineGeneration) return
         const current = this.labels[start]
@@ -520,17 +531,20 @@ export class Session {
   }
 
   detectOnsets() {
-    this.checkpoint()
     if (!this.sily || !this.sample) return
-    this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, MAX_CLASSIFIED))
+    this.checkpoint()
+    this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, MAX_CLASSIFIED), true)
   }
 
   gridSlice(count: number) {
-    this.checkpoint()
     if (!this.sample) return
+    this.checkpoint()
     const start = this.markers[0] ?? 0
     const end = this.sample.left.length
-    this.setMarkers(Array.from({ length: count }, (_, i) => start + ((end - start) * i) / count))
+    this.setMarkers(
+      Array.from({ length: count }, (_, i) => start + ((end - start) * i) / count),
+      true,
+    )
   }
 
   detectBpm() {
