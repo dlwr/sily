@@ -41,7 +41,7 @@ impl Features {
 
 const WINDOW: usize = 2048;
 const HOP: usize = 512;
-const ANALYSIS_SECONDS: f32 = 1.0;
+const ANALYSIS_SECONDS: f32 = 0.05;
 const ENVELOPE_BLOCK: usize = 64;
 const MEL_BANDS: usize = 26;
 const EPS: f32 = 1e-10;

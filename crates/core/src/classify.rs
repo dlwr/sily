@@ -69,7 +69,7 @@ pub fn by_rules(f: &Features) -> Prediction {
         }
     } else if f.low > 0.6 {
         Category::Kick
-    } else if f.centroid > 0.3 && f.high > 0.6 {
+    } else if f.high / (f.mid + f.high + 1e-6) > 0.85 && f.high > 0.4 {
         if f.decay < 0.12 {
             Category::ClosedHat
         } else if f.decay < 0.6 {
@@ -202,5 +202,15 @@ mod tests {
     #[test]
     fn rules_are_not_confident() {
         assert!(by_rules(&extract(&tone(55.0, 0.4, 12.0), SR)).confidence < 0.6);
+    }
+
+    #[test]
+    fn rules_hear_a_hat_over_a_kick_tail_as_a_hat() {
+        let tail: Vec<f32> = tone(60.0, 0.33, 8.0).iter().map(|x| x * 0.08).collect();
+        let mut s = noise(0.33, 60.0, None);
+        for (x, t) in s.iter_mut().zip(tail) {
+            *x = *x * 0.3 + t;
+        }
+        assert_eq!(category(&s), Category::ClosedHat);
     }
 }
