@@ -1,6 +1,7 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
 import type { ToWorklet } from '../audio/messages'
 import { arrangePads, remapEvents, type Category } from '../classify/categories'
+import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
@@ -20,6 +21,7 @@ export type Sample = { name: string; left: Float32Array; right: Float32Array; mo
 const PADS = 16
 const CORRECTIONS_KEY = 'sily.corrections'
 const CLASSIFY_DELAY_MS = 150
+const MAX_CLASSIFIED = 128
 const CANDIDATES = 4
 const CLAP_MAX_SECONDS = 10
 const UPPER_KINDS: Category[] = ['keys', 'vocal', 'melody', 'fx']
@@ -75,6 +77,7 @@ export class Session {
   private features = new Map<number, number[]>()
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
+  private kitPending = false
   private stretchVersion = 0
   private requested = new Set<string>()
   private inflight = new Set<Promise<unknown>>()
@@ -216,6 +219,7 @@ export class Session {
     const len = this.sample?.left.length ?? 0
     this.markers = [...new Set(markers.map((m) => Math.max(0, Math.min(len - 1, Math.round(m)))))].sort((a, b) => a - b)
     this.padSlices = identity()
+    this.kitPending = this.markers.length > PADS
     this.sendMarkers()
     this.invalidateStretched()
     this.classifySlices()
@@ -243,15 +247,42 @@ export class Session {
   }
 
   arrangePads() {
-    const before = this.padSlices
-    const after = arrangePads(before, (slice) => {
+    const after = arrangePads(this.padSlices, (slice) => {
       const start = this.sliceStart(slice)
       return start === null ? null : (this.labels[start]?.category ?? null)
     })
-    this.pads = after.map((slice) => this.pads[before.indexOf(slice)])
-    this.events = remapEvents(this.events, before, after)
+    this.events = remapEvents(this.events, this.padSlices, after)
+    this.applyPadSlices(after)
+  }
+
+  buildKit() {
+    const count = Math.min(Math.max(1, this.markers.length), MAX_CLASSIFIED)
+    const candidates = Array.from({ length: count }, (_, slice) => {
+      const start = this.sliceStart(slice)
+      return { slice, scores: (start !== null && this.labels[start]?.scores) || {} }
+    })
+    const after = buildKit(candidates)
+    this.events = dropUnplacedEvents(this.events, this.padSlices, after)
+    this.applyPadSlices(after)
+  }
+
+  assignSliceAt(frame: number) {
+    if (!this.sample) return
+    const slice = Math.max(0, this.markers.findLastIndex((m) => m <= frame))
+    const after = [...this.padSlices]
+    const other = after.indexOf(slice)
+    if (other >= 0) after[other] = after[this.selectedPad]
+    after[this.selectedPad] = slice
+    this.events = dropUnplacedEvents(this.events, this.padSlices, after)
+    this.applyPadSlices(after)
+  }
+
+  private applyPadSlices(after: number[]) {
+    const before = this.padSlices
+    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false })
+    this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
+    this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
     this.padSlices = after
-    this.selectedPad = after.indexOf(before[this.selectedPad])
     this.sily?.send({ type: 'padSlices', slices: [...after] })
     this.pads.forEach((p, pad) => this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse }))
     this.syncEvents()
@@ -335,7 +366,7 @@ export class Session {
     if (!this.sily || !this.sample) return
     const count = Math.max(1, this.markers.length)
     const labels: Record<number, Label> = {}
-    for (let slice = 0; slice < Math.min(count, PADS); slice++) {
+    for (let slice = 0; slice < Math.min(count, MAX_CLASSIFIED); slice++) {
       const start = this.sliceStart(slice)!
       const end = this.markers[slice + 1] ?? this.sample.left.length
       const previous = this.labels[start]
@@ -348,6 +379,10 @@ export class Session {
       labels[start] = { category: result.category, confidence: result.confidence, manual: false, scores: result.scores }
     }
     this.labels = labels
+    if (this.kitPending) {
+      this.kitPending = false
+      this.buildKit()
+    }
     this.refineUpper()
   }
 
@@ -392,7 +427,7 @@ export class Session {
 
   detectOnsets() {
     if (!this.sily || !this.sample) return
-    this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, 64))
+    this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, MAX_CLASSIFIED))
   }
 
   gridSlice(count: number) {
