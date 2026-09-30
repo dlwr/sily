@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import type { Session } from '../state/session.svelte'
+  import { follow, scrollView, zoomView, type View } from '../state/view'
 
   let { session }: { session: Session } = $props()
 
@@ -9,12 +11,42 @@
   let dragging: number | null = null
 
   const HANDLE_PX = 6
+  const ZOOM_SPEED = 0.01
 
-  const frameOfX = (x: number) => {
-    const len = session.sample?.left.length ?? 0
-    return Math.max(0, Math.min(len - 1, Math.round((x / width) * len)))
+  const total = $derived(session.sample?.left.length ?? 0)
+  let view = $state<View>({ start: 0, end: 1 })
+  const zoomed = $derived(view.start > 0 || view.end < total)
+
+  $effect(() => {
+    view = { start: 0, end: Math.max(1, session.sample?.left.length ?? 1) }
+  })
+
+  $effect(() => {
+    const frame = session.auditionFrame
+    if (frame !== null && total > 0) view = follow(untrack(() => view), frame, total)
+  })
+
+  const frameOfX = (x: number) =>
+    Math.max(0, Math.min(total - 1, Math.round(view.start + (x / width) * (view.end - view.start))))
+  const xOfFrame = (frame: number) => ((frame - view.start) / (view.end - view.start)) * width
+
+  const onwheel = (e: WheelEvent) => {
+    if (!session.sample) return
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      view = zoomView(view, frameOfX(e.offsetX), Math.exp(e.deltaY * ZOOM_SPEED), total)
+      return
+    }
+    const horizontal = e.shiftKey ? e.deltaY : e.deltaX
+    if (horizontal === 0 || !zoomed) return
+    e.preventDefault()
+    view = scrollView(view, (horizontal / width) * (view.end - view.start), total)
   }
-  const xOfFrame = (frame: number) => (frame / (session.sample?.left.length ?? 1)) * width
+
+  $effect(() => {
+    canvas.addEventListener('wheel', onwheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onwheel)
+  })
 
   const peaks = $derived.by(() => {
     const mono = session.sample?.mono
@@ -22,12 +54,13 @@
     const columns = Math.floor(width)
     const min = new Float32Array(columns)
     const max = new Float32Array(columns)
-    const per = mono.length / columns
+    const per = (view.end - view.start) / columns
     for (let c = 0; c < columns; c++) {
       let lo = 0
       let hi = 0
-      const end = Math.min(mono.length, Math.floor((c + 1) * per))
-      for (let i = Math.floor(c * per); i < end; i++) {
+      const from = Math.floor(view.start + c * per)
+      const end = Math.min(mono.length, Math.max(from + 1, Math.floor(view.start + (c + 1) * per)))
+      for (let i = from; i < end; i++) {
         const v = mono[i]
         if (v < lo) lo = v
         if (v > hi) hi = v
@@ -66,6 +99,7 @@
 
     ctx.font = '600 12px system-ui, sans-serif'
     session.markers.forEach((m, i) => {
+      if (m < view.start || m > view.end) return
       const x = Math.round(xOfFrame(m)) + 0.5
       ctx.strokeStyle = color('--marker')
       ctx.beginPath()
@@ -129,6 +163,12 @@
   {#if session.auditionFrame !== null && session.sample}
     <div class="playhead" style:transform="translateX({xOfFrame(session.auditionFrame)}px)"></div>
   {/if}
+  {#if zoomed}
+    <div class="overview" aria-hidden="true">
+      <span style:left="{(view.start / total) * 100}%" style:width="{((view.end - view.start) / total) * 100}%"></span>
+    </div>
+    <button class="fit" onclick={() => (view = { start: 0, end: total })}>全体</button>
+  {/if}
   {#if !session.sample}
     <p class="empty">音声ファイルをドロップ、または下の「PCの音を録音」で鳴っている音を取り込む</p>
   {/if}
@@ -158,6 +198,31 @@
     width: 2px;
     background: var(--accent);
     pointer-events: none;
+  }
+
+  .overview {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 4px;
+    background: var(--line);
+    pointer-events: none;
+  }
+
+  .overview span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--muted);
+  }
+
+  .fit {
+    position: absolute;
+    right: 6px;
+    bottom: 10px;
+    padding: 2px 8px;
+    font-size: 12px;
   }
 
   .empty {
