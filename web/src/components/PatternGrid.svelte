@@ -54,13 +54,17 @@
             class="event"
             style:left={pct(ev.beat + ev.nudge)}
             style:opacity={0.4 + ev.velocity * 0.6}
-            title="ドラッグでずらす / 右クリックで削除"
+            title="ドラッグでずらす / ホイールで音程 / 右クリックで削除"
             role="gridcell"
             tabindex="-1"
             onpointerdown={(e) => onEventDown(e, ev.id)}
             onpointermove={onEventMove}
             onpointerup={() => (drag = null)}
-          ></span>
+            onwheel={(e) => {
+              e.preventDefault()
+              session.shiftPitch(ev.id, e.deltaY < 0 ? 1 : -1)
+            }}
+          >{#if ev.pitch !== 0}<span class="pitch num">{ev.pitch > 0 ? '+' : ''}{ev.pitch}</span>{/if}</span>
         {/each}
       </div>
     </div>
@@ -68,7 +72,7 @@
   <div class="playhead" style:left="calc(28px + (100% - 28px) * {session.beat / session.lengthBeats})"></div>
 </div>
 <div class="footer">
-  <span class="muted">空いたマスをクリックで置く / ノートはドラッグでずらす / 右クリックで削除</span>
+  <span class="muted">空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
   <button onclick={() => session.clearPattern()} disabled={session.events.length === 0}>パターン消去</button>
 </div>
 
@@ -121,6 +125,16 @@
     background: var(--accent);
     border-radius: 2px;
     cursor: ew-resize;
+  }
+
+  .pitch {
+    position: absolute;
+    left: 9px;
+    top: -1px;
+    font-size: 10px;
+    color: var(--text);
+    pointer-events: none;
+    white-space: nowrap;
   }
 
   .playhead {

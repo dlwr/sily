@@ -3,6 +3,7 @@
   import Pads from './components/Pads.svelte'
   import PatternGrid from './components/PatternGrid.svelte'
   import SliceTools from './components/SliceTools.svelte'
+  import SourceSpeed from './components/SourceSpeed.svelte'
   import Transport from './components/Transport.svelte'
   import Waveform from './components/Waveform.svelte'
   import { noteForCode, padForCode } from './state/keymap'
@@ -52,7 +53,7 @@
     }
     if (session.keyboardMode) {
       const note = noteForCode(e.code)
-      if (note !== undefined) session.noteDown(note)
+      if (note !== undefined) session.noteDown(note, e.timeStamp)
       return
     }
     const pad = padForCode(e.code)
@@ -92,6 +93,7 @@
         {#if session.message}<span class="error">{session.message}</span>{/if}
       </div>
       <Waveform {session} />
+      <SourceSpeed {session} />
       <SliceTools {session} />
     </section>
     <section class="play">

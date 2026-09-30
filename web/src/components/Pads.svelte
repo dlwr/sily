@@ -19,7 +19,9 @@
         {#key session.hits[pad]}<span class="flash" class:on={session.hits[pad] > 0}></span>{/key}
         <span class="key">{padKeyLabel(pad)}</span>
         <span class="num label">{pad + 1}</span>
-        {#if session.pads[pad].stretch}<span class="mode">ST</span>{/if}
+        {#if session.pads[pad].stretch || session.pads[pad].reverse}
+          <span class="mode">{[session.pads[pad].stretch && '長', session.pads[pad].reverse && '逆'].filter(Boolean).join(' ')}</span>
+        {/if}
       </button>
     {/each}
   {/each}
