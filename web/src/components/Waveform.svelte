@@ -72,11 +72,12 @@
       ctx.moveTo(x, 0)
       ctx.lineTo(x, height)
       ctx.stroke()
-      if (i < 16) {
+      const pad = session.padSlices.indexOf(i)
+      if (pad >= 0) {
         ctx.fillStyle = color('--marker')
         ctx.fillRect(x, 0, 18, 16)
         ctx.fillStyle = '#111'
-        ctx.fillText(String(i + 1), x + 3, 12)
+        ctx.fillText(String(pad + 1), x + 3, 12)
       }
     })
   })
@@ -123,6 +124,7 @@
     {onpointermove}
     onpointerup={() => (dragging = null)}
     oncontextmenu={(e) => e.preventDefault()}
+    ondblclick={(e) => session.assignSliceAt(frameOfX(e.offsetX))}
   ></canvas>
   {#if session.auditionFrame !== null && session.sample}
     <div class="playhead" style:transform="translateX({xOfFrame(session.auditionFrame)}px)"></div>
