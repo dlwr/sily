@@ -5,7 +5,17 @@ import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
 import { resample } from '../classify/clap'
 import { DEFAULT_FX, type FxSettings } from '../fx/fx'
+import { newId } from '../storage/db'
 import { deleteSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
+import {
+  deleteProject,
+  listProjects,
+  loadProject,
+  saveProject,
+  saveSource,
+  type ProjectDoc,
+} from '../storage/projects'
+import { untrack } from 'svelte'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
@@ -41,6 +51,18 @@ type Doc = {
 export type Sample = { name: string; left: Float32Array; right: Float32Array; mono: Float32Array }
 
 const PADS = 16
+const LAST_PROJECT_KEY = 'sily.project'
+const SAVE_DELAY_MS = 800
+const freshPad = (): PadSettings => ({
+  pitch: 0,
+  gain: 1,
+  stretch: false,
+  reverse: false,
+  choke: 0,
+  chokeAuto: true,
+  fx: { ...DEFAULT_FX },
+  sample: null,
+})
 const CORRECTIONS_KEY = 'sily.corrections'
 const CLASSIFY_DELAY_MS = 150
 const MAX_CLASSIFIED = 128
@@ -90,6 +112,13 @@ export class Session {
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
   library = $state<SampleMeta[]>([])
+  projectId = $state<string | null>(null)
+  projectName = $state('無題')
+  projects = $state<ProjectDoc[]>([])
+  private sourceId: string | null = null
+  private lastSaved = ''
+  private saveTimer: ReturnType<typeof setTimeout> | undefined
+  private pendingSave: string | null = null
   private beforeGenerate: PadEvent[] | null = null
   private clap = new ClapClient()
   private refineGeneration = 0
@@ -108,7 +137,7 @@ export class Session {
   private stretchVersion = 0
   private requested = new Set<string>()
   private inflight = new Set<Promise<unknown>>()
-  private own = new Map<number, { left: Float32Array; right: Float32Array }>()
+  private own = new Map<number, { id: string; left: Float32Array; right: Float32Array }>()
   private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
   get lengthBeats() {
@@ -138,6 +167,169 @@ export class Session {
     this.refreshLibrary()
     this.syncTransport()
     this.syncGroove()
+    await this.refreshProjects()
+    const last = readLastProject()
+    if (last && this.projects.some((p) => p.id === last)) await this.openProject(last)
+    else await this.newProject()
+    $effect.root(() => {
+      $effect(() => {
+        const json = JSON.stringify(this.projectState())
+        untrack(() => this.scheduleSave(json))
+      })
+    })
+  }
+
+  private projectState() {
+    return $state.snapshot({
+      name: this.projectName,
+      markers: this.markers,
+      padSlices: this.padSlices,
+      pads: this.pads,
+      events: this.events,
+      labels: this.labels,
+      bpm: this.bpm,
+      bars: this.bars,
+      metronome: this.metronome,
+      grid: this.grid,
+      strength: this.strength,
+      swing: this.swing,
+      style: this.style,
+      density: this.density,
+      looseness: this.looseness,
+      sourceSpeed: this.sourceSpeed,
+      sourceBpm: this.sourceBpm,
+      masterFx: this.masterFx,
+    })
+  }
+
+  private scheduleSave(json: string) {
+    if (!this.projectId || json === this.lastSaved) return
+    if (!this.sample && !this.pads.some((p) => p.sample)) return
+    this.pendingSave = json
+    clearTimeout(this.saveTimer)
+    this.saveTimer = setTimeout(() => this.flushSave(), SAVE_DELAY_MS)
+  }
+
+  private async flushSave() {
+    clearTimeout(this.saveTimer)
+    const json = this.pendingSave
+    const id = this.projectId
+    this.pendingSave = null
+    if (!json || !id) return
+    try {
+      if (this.sample && !this.sourceId) {
+        await navigator.storage?.persist?.()
+        this.sourceId = await saveSource(this.sample.left, this.sample.right, this.sampleRate)
+      }
+      await saveProject({
+        id,
+        name: this.projectName,
+        version: 1,
+        updatedAt: 0,
+        sourceId: this.sourceId,
+        sourceName: this.sample?.name ?? null,
+        state: JSON.parse(json),
+      })
+      this.lastSaved = json
+      await this.refreshProjects()
+    } catch {
+      this.message = 'プロジェクトを保存できなかった'
+    }
+  }
+
+  async refreshProjects() {
+    try {
+      this.projects = await listProjects()
+    } catch {
+      this.projects = []
+    }
+  }
+
+  async newProject() {
+    await this.flushSave()
+    this.projectId = newId()
+    this.projectName = `無題 ${new Date().toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+    writeLastProject(this.projectId)
+    this.clearSource()
+    this.pads = Array.from({ length: PADS }, freshPad)
+    this.events = []
+    this.masterFx = { ...DEFAULT_FX }
+    this.syncOwn()
+    this.pads.forEach((_, pad) => this.sendPad(pad))
+    this.sily?.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
+    this.syncEvents()
+    this.lastSaved = ''
+  }
+
+  async openProject(id: string) {
+    if (!this.sily) return
+    await this.flushSave()
+    const loaded = await loadProject(id)
+    if (!loaded) return
+    const { doc, source } = loaded
+    const st = doc.state as ReturnType<Session['projectState']>
+    this.projectId = id
+    this.projectName = doc.name
+    writeLastProject(id)
+    if (source) {
+      const left = resample(source.left, source.sampleRate, this.sampleRate)
+      const right = resample(source.right, source.sampleRate, this.sampleRate)
+      this.setSample(doc.sourceName ?? 'source', left, right)
+      this.sourceId = source.sampleRate === this.sampleRate ? doc.sourceId : null
+    } else {
+      this.clearSource()
+    }
+    this.markers = st.markers ?? []
+    this.labels = st.labels ?? {}
+    this.padSlices = st.padSlices ?? identity()
+    this.pads = (st.pads ?? []).map((p) => ({ ...freshPad(), ...p }))
+    while (this.pads.length < PADS) this.pads.push(freshPad())
+    this.events = st.events ?? []
+    this.bpm = st.bpm ?? this.bpm
+    this.bars = st.bars ?? this.bars
+    this.metronome = st.metronome ?? this.metronome
+    this.grid = st.grid ?? this.grid
+    this.strength = st.strength ?? this.strength
+    this.swing = st.swing ?? this.swing
+    this.style = st.style ?? this.style
+    this.density = st.density ?? this.density
+    this.looseness = st.looseness ?? this.looseness
+    this.sourceSpeed = st.sourceSpeed ?? { mode: 'tape', rate: 1 }
+    this.sourceBpm = st.sourceBpm ?? null
+    this.masterFx = { ...DEFAULT_FX, ...st.masterFx }
+    this.history = new History<Doc>()
+    this.syncOwn()
+    this.sendMarkers()
+    this.pads.forEach((_, pad) => this.sendPad(pad))
+    this.sily.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
+    this.syncEvents()
+    this.syncTransport()
+    this.syncGroove()
+    this.applySource()
+    this.classifySlices()
+    this.lastSaved = JSON.stringify(this.projectState())
+  }
+
+  async removeProject(id: string) {
+    await deleteProject(id)
+    if (id === this.projectId) {
+      this.projectId = null
+      await this.newProject()
+    }
+    await this.refreshProjects()
+  }
+
+  private clearSource() {
+    this.sample = null
+    this.sourceId = null
+    this.engineSample = null
+    this.loadedStretch = null
+    this.markers = []
+    this.labels = {}
+    this.padSlices = identity()
+    this.stopAudition()
+    this.sily?.send({ type: 'load', left: new Float32Array(0), right: new Float32Array(0) })
+    this.history = new History<Doc>()
   }
 
   async loadFile(file: File) {
@@ -154,6 +346,7 @@ export class Session {
   setSample(name: string, left: Float32Array, right: Float32Array) {
     if (!this.sily) return
     this.sample = { name, left, right, mono: mixdown(left, right) }
+    this.sourceId = null
     this.sourceSpeed = { mode: 'tape', rate: 1 }
     this.sourceBpm = null
     this.loadEngineSample(left, right, null)
@@ -378,7 +571,7 @@ export class Session {
     const settings = loaded.meta.settings as Partial<PadSettings>
     const category = loaded.meta.category as Category
     Object.assign(this.pads[pad], settings, { sample: { id, name: loaded.meta.name, category } })
-    this.own.set(pad, { left, right })
+    this.own.set(pad, { id, left, right })
     this.sily.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
     this.sendPad(pad)
     this.autoChoke()
@@ -424,7 +617,7 @@ export class Session {
   private applyPadSlices(after: number[]) {
     this.adopt()
     const before = this.padSlices
-    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null })
+    const fresh = freshPad
     this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
     this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
     this.padSlices = after
@@ -510,16 +703,18 @@ export class Session {
 
   private syncOwn() {
     this.pads.forEach((p, pad) => {
-      if (!p.sample && this.own.has(pad)) {
+      const current = this.own.get(pad)
+      if (current && current.id !== p.sample?.id) {
         this.own.delete(pad)
         this.sily?.send({ type: 'padSample', pad, left: null, right: null })
-      } else if (p.sample && !this.own.has(pad)) {
+      }
+      if (p.sample && !this.own.has(pad)) {
         const id = p.sample.id
         loadSample(id).then((loaded) => {
           if (!loaded || this.pads[pad].sample?.id !== id) return
           const left = resample(loaded.left, loaded.meta.sampleRate, this.sampleRate)
           const right = resample(loaded.right, loaded.meta.sampleRate, this.sampleRate)
-          this.own.set(pad, { left, right })
+          this.own.set(pad, { id, left, right })
           this.sily?.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
           this.invalidateStretched([pad])
         })
@@ -969,4 +1164,20 @@ function download(blob: Blob, name: string) {
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
+}
+
+function readLastProject(): string | null {
+  try {
+    return localStorage.getItem(LAST_PROJECT_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeLastProject(id: string) {
+  try {
+    localStorage.setItem(LAST_PROJECT_KEY, id)
+  } catch {
+    return
+  }
 }
