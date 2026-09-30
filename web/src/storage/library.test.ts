@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { deleteSample, listSamples, loadSample, openStore, saveSample, type NewSample } from './library'
+import { deleteSample, importSample, listSamples, loadSample, openStore, saveSample, type NewSample } from './library'
 
 const sample = (name: string, value = 0.5): NewSample => ({
   name,
@@ -44,5 +44,10 @@ describe('sample library', () => {
     const id = await saveSample(sample('a'))
     await deleteSample(id)
     expect([await listSamples(), await loadSample(id)]).toEqual([[], null])
+  })
+  it('imports a sample under its original id', async () => {
+    const meta = { id: 'fixed', name: 'x', category: 'kick', sampleRate: 44100, frames: 1, createdAt: 5, settings: {} }
+    await importSample({ meta, left: new Float32Array([0.5]), right: new Float32Array([0.5]) })
+    expect((await loadSample('fixed'))!.meta.name).toBe('x')
   })
 })

@@ -49,3 +49,8 @@ export const loadSample = async (
 export const deleteSample = async (id: string) => {
   await Promise.all([remove('samples', id), remove('audio', id)])
 }
+
+export const importSample = async (sample: { meta: SampleMeta; left: Float32Array; right: Float32Array }) => {
+  await put<StoredAudio>('audio', { id: sample.meta.id, left: sample.left, right: sample.right, sampleRate: sample.meta.sampleRate })
+  await put<SampleMeta>('samples', sample.meta)
+}
