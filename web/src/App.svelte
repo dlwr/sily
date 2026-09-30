@@ -31,7 +31,14 @@
       : target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement
 
   const onkeydown = (e: KeyboardEvent) => {
-    if (!session.sily || e.repeat || e.metaKey || e.ctrlKey || typing(e.target)) return
+    if (!session.sily || e.repeat || typing(e.target)) return
+    if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ') {
+      e.preventDefault()
+      if (e.shiftKey) session.redo()
+      else session.undo()
+      return
+    }
+    if (e.metaKey || e.ctrlKey) return
     switch (e.code) {
       case 'Space':
         e.preventDefault()

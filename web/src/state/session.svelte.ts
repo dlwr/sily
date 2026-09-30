@@ -7,6 +7,7 @@ import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
+import { History } from './history'
 import { frameAt } from './timing'
 
 export type PadSettings = { pitch: number; gain: number; stretch: boolean; reverse: boolean }
@@ -16,6 +17,14 @@ export type Label = {
   manual: boolean
   scores: Partial<Record<Category, number>>
 }
+type Doc = {
+  events: PadEvent[]
+  markers: number[]
+  padSlices: number[]
+  pads: PadSettings[]
+  labels: Record<number, Label>
+}
+
 export type Sample = { name: string; left: Float32Array; right: Float32Array; mono: Float32Array }
 
 const PADS = 16
@@ -77,6 +86,7 @@ export class Session {
   private features = new Map<number, number[]>()
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
+  private history = new History<Doc>()
   private kitPending = false
   private stretchVersion = 0
   private requested = new Set<string>()
@@ -100,6 +110,7 @@ export class Session {
       if (t.auditionFrame !== null) this.lastTick = { frame: t.auditionFrame, time: t.time }
     }
     sily.onRecorded = (r) => {
+      this.checkpoint('record')
       this.adopt()
       this.events = recordHit(this.events, r.pad, r.beat, r.velocity, r.pitch)
       this.syncEvents()
@@ -128,6 +139,7 @@ export class Session {
     this.loadEngineSample(left, right, null)
     this.sily.send({ type: 'sourceRate', rate: 1 })
     this.adopt()
+    this.history = new History<Doc>()
     this.markers = []
     this.labels = {}
     this.features.clear()
@@ -199,11 +211,13 @@ export class Session {
   }
 
   addMarker(frame: number) {
+    this.checkpoint()
     if (!this.sample || this.markers.includes(frame)) return
     this.setMarkers([...this.markers, frame])
   }
 
   removeMarkerNear(frame: number, tolerance: number) {
+    this.checkpoint()
     const nearest = this.markers.reduce<number | null>(
       (best, m) => (Math.abs(m - frame) <= tolerance && (best === null || Math.abs(m - frame) < Math.abs(best - frame)) ? m : best),
       null,
@@ -212,6 +226,7 @@ export class Session {
   }
 
   moveMarker(from: number, to: number) {
+    this.checkpoint('move-marker')
     this.setMarkers(this.markers.map((m) => (m === from ? to : m)))
   }
 
@@ -231,6 +246,7 @@ export class Session {
   }
 
   setLabel(pad: number, category: Category) {
+    this.checkpoint()
     const start = this.sliceStart(this.padSlices[pad])
     if (start === null) return
     this.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
@@ -247,6 +263,7 @@ export class Session {
   }
 
   arrangePads() {
+    this.checkpoint()
     const after = arrangePads(this.padSlices, (slice) => {
       const start = this.sliceStart(slice)
       return start === null ? null : (this.labels[start]?.category ?? null)
@@ -256,6 +273,11 @@ export class Session {
   }
 
   buildKit() {
+    this.checkpoint()
+    this.applyKit()
+  }
+
+  private applyKit() {
     const count = Math.min(Math.max(1, this.markers.length), MAX_CLASSIFIED)
     const candidates = Array.from({ length: count }, (_, slice) => {
       const start = this.sliceStart(slice)
@@ -267,6 +289,7 @@ export class Session {
   }
 
   assignSliceAt(frame: number) {
+    this.checkpoint()
     if (!this.sample) return
     const slice = Math.max(0, this.markers.findLastIndex((m) => m <= frame))
     const after = [...this.padSlices]
@@ -289,6 +312,49 @@ export class Session {
     this.invalidateStretched()
   }
 
+  clearMarkers() {
+    this.checkpoint()
+    this.setMarkers([])
+  }
+
+  undo() {
+    const previous = this.history.undo(this.doc())
+    if (previous) this.restore(previous)
+  }
+
+  redo() {
+    const next = this.history.redo(this.doc())
+    if (next) this.restore(next)
+  }
+
+  private checkpoint(key?: string) {
+    this.history.record(this.doc(), key)
+  }
+
+  private doc(): Doc {
+    return $state.snapshot({
+      events: this.events,
+      markers: this.markers,
+      padSlices: this.padSlices,
+      pads: this.pads,
+      labels: this.labels,
+    }) as Doc
+  }
+
+  private restore(doc: Doc) {
+    this.adopt()
+    this.events = doc.events
+    this.markers = doc.markers
+    this.padSlices = doc.padSlices
+    this.pads = doc.pads
+    this.labels = doc.labels
+    this.kitPending = false
+    this.sendMarkers()
+    this.pads.forEach((p, pad) => this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse }))
+    this.syncEvents()
+    this.invalidateStretched()
+  }
+
   generateCandidates() {
     if (!this.sample) return
     const secondsPerFrame = 1 / this.sampleRate / (this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1)
@@ -304,6 +370,7 @@ export class Session {
         scores: label.scores,
       })
     })
+    if (!this.beforeGenerate) this.checkpoint()
     this.beforeGenerate ??= this.events
     const base = Math.floor(Math.random() * 1e9)
     this.candidates = Array.from({ length: CANDIDATES }, (_, i) =>
@@ -381,7 +448,7 @@ export class Session {
     this.labels = labels
     if (this.kitPending) {
       this.kitPending = false
-      this.buildKit()
+      this.applyKit()
     }
     this.refineUpper()
   }
@@ -426,11 +493,13 @@ export class Session {
   }
 
   detectOnsets() {
+    this.checkpoint()
     if (!this.sily || !this.sample) return
     this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, MAX_CLASSIFIED))
   }
 
   gridSlice(count: number) {
+    this.checkpoint()
     if (!this.sample) return
     const start = this.markers[0] ?? 0
     const end = this.sample.left.length
@@ -485,6 +554,7 @@ export class Session {
   }
 
   setPad(pad: number, patch: Partial<PadSettings>) {
+    this.checkpoint(`pad:${pad}:${Object.keys(patch).join()}`)
     Object.assign(this.pads[pad], patch)
     const p = this.pads[pad]
     this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse })
@@ -517,30 +587,35 @@ export class Session {
   }
 
   toggleStepAt(pad: number, beat: number) {
+    this.checkpoint()
     this.adopt()
     this.events = toggleStep(this.events, pad, beat, this.grid / 2)
     this.syncEvents()
   }
 
   nudge(id: string, delta: number) {
+    this.checkpoint(`nudge:${id}`)
     this.adopt()
     this.events = nudgeEvent(this.events, id, delta)
     this.syncEvents()
   }
 
   shiftPitch(id: string, delta: number) {
+    this.checkpoint(`pitch:${id}`)
     this.adopt()
     this.events = shiftPitch(this.events, id, delta)
     this.syncEvents()
   }
 
   remove(id: string) {
+    this.checkpoint()
     this.adopt()
     this.events = removeEvent(this.events, id)
     this.syncEvents()
   }
 
   clearPattern() {
+    this.checkpoint()
     this.adopt()
     this.events = []
     this.syncEvents()
