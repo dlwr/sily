@@ -15,7 +15,7 @@ import pathlib
 import subprocess
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import cross_val_predict
 
@@ -74,31 +74,55 @@ def main() -> None:
     if len(set(y)) < 2:
         raise SystemExit("クラスが2つ以上必要")
 
-    mean = x.mean(axis=0)
-    scale = x.std(axis=0)
-    scale[scale == 0] = 1.0
-    z = (x - mean) / scale
-
-    model = LogisticRegression(max_iter=4000, C=1.0, class_weight="balanced")
+    model = HistGradientBoostingClassifier(max_iter=60, max_leaf_nodes=15, learning_rate=0.1, random_state=0)
     folds = min(5, min(np.unique(y, return_counts=True)[1]))
     if folds >= 2:
-        predicted = cross_val_predict(model, z, y, cv=folds)
+        predicted = cross_val_predict(model, x, y, cv=folds)
         print(classification_report(y, predicted, zero_division=0))
-    model.fit(z, y)
+    model.fit(x, y)
+
+    exported = export(model)
+    agreement = (np.array(exported["classes"])[evaluate(exported, x).argmax(axis=1)] == model.predict(x)).mean()
+    print(f"exported model agrees with scikit-learn on {agreement:.4f} of samples")
+    if agreement < 0.999:
+        raise SystemExit("書き出したモデルが scikit-learn と一致しない")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
-        json.dumps(
-            {
-                "classes": list(model.classes_),
-                "mean": mean.tolist(),
-                "scale": scale.tolist(),
-                "weights": model.coef_.tolist() if len(model.classes_) > 2 else [(-model.coef_[0]).tolist(), model.coef_[0].tolist()],
-                "bias": model.intercept_.tolist() if len(model.classes_) > 2 else [-model.intercept_[0], model.intercept_[0]],
-            }
-        )
-    )
+    args.out.write_text(json.dumps(exported, separators=(",", ":")))
     print(f"wrote {args.out} ({len(y)} samples, {len(model.classes_)} classes)")
+
+
+def export(model: HistGradientBoostingClassifier) -> dict:
+    trees = []
+    for iteration in model._predictors:
+        for k, predictor in enumerate(iteration):
+            nodes = predictor.nodes
+            trees.append(
+                {
+                    "class": k if len(model.classes_) > 2 else 1,
+                    "feature": nodes["feature_idx"].tolist(),
+                    "threshold": [float(t) for t in nodes["num_threshold"]],
+                    "left": nodes["left"].tolist(),
+                    "right": nodes["right"].tolist(),
+                    "value": [round(float(v), 6) for v in nodes["value"]],
+                    "leaf": nodes["is_leaf"].astype(bool).tolist(),
+                }
+            )
+    baseline = np.ravel(model._baseline_prediction).tolist()
+    if len(model.classes_) == 2:
+        baseline = [0.0, baseline[0]]
+    return {"kind": "trees", "classes": [str(c) for c in model.classes_], "baseline": baseline, "trees": trees}
+
+
+def evaluate(exported: dict, x: np.ndarray) -> np.ndarray:
+    logits = np.tile(np.array(exported["baseline"], dtype=np.float64), (len(x), 1))
+    for tree in exported["trees"]:
+        for i, row in enumerate(x):
+            node = 0
+            while not tree["leaf"][node]:
+                node = tree["left"][node] if row[tree["feature"][node]] <= tree["threshold"][node] else tree["right"][node]
+            logits[i, tree["class"]] += tree["value"][node]
+    return logits
 
 
 if __name__ == "__main__":
