@@ -1,4 +1,6 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
+import type { ToWorklet } from '../audio/messages'
+import { encodeWav24, soundingLength } from '../export/wav'
 import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { frameAt } from './timing'
@@ -7,6 +9,8 @@ export type PadSettings = { pitch: number; gain: number; stretch: boolean; rever
 export type Sample = { name: string; left: Float32Array; right: Float32Array; mono: Float32Array }
 
 const PADS = 16
+const EXPORT_TAIL_SECONDS = 2
+const SILENCE = 1e-4
 
 export class Session {
   sily = $state<Sily | null>(null)
@@ -40,7 +44,7 @@ export class Session {
   private map = new SourceMap(1, 1)
   private engineSample: { left: Float32Array; right: Float32Array } | null = null
   private loadedStretch: number | null = null
-  private stretchedSent = new Set<string>()
+  private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
   get lengthBeats() {
     return this.bars * 4
@@ -87,7 +91,7 @@ export class Session {
     this.sily.send({ type: 'sourceRate', rate: 1 })
     this.markers = []
     this.pads.forEach((p) => (p.stretch = false))
-    this.stretchedSent.clear()
+    this.stretched.clear()
     this.events = []
     this.syncEvents()
     this.message = ''
@@ -298,6 +302,35 @@ export class Session {
     this.syncEvents()
   }
 
+  async exportWav(loops: number) {
+    if (!this.sily || !this.sample) return
+    const loopSeconds = (this.lengthBeats * 60) / this.bpm
+    const { left, right } = await this.sily.renderOffline(this.snapshot(loops), loops * loopSeconds + EXPORT_TAIL_SECONDS)
+    const frames = soundingLength([left, right], Math.round(loops * loopSeconds * this.sampleRate), SILENCE)
+    const wav = encodeWav24(left.subarray(0, frames), right.subarray(0, frames), this.sampleRate)
+    const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${this.sample.name.replace(/\.[^.]+$/, '')}-${this.bpm}bpm-${loops}x.wav`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  private snapshot(loops: number): ToWorklet[] {
+    const { left, right } = this.engineSample!
+    return [
+      { type: 'load', left, right },
+      { type: 'sourceRate', rate: this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1 },
+      { type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) },
+      ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse })),
+      ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),
+      { type: 'groove', grid: this.grid, strength: this.strength, swing: this.swing },
+      { type: 'events', events: this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch })) },
+      { type: 'playLimit', beats: loops * this.lengthBeats },
+      { type: 'transport', bpm: this.bpm, playing: true, metronome: false, lengthBeats: this.lengthBeats },
+    ]
+  }
+
   private applySource() {
     if (!this.sily || !this.sample) return
     const { mode, rate } = this.sourceSpeed
@@ -327,7 +360,7 @@ export class Session {
   private invalidateStretched(only?: number[]) {
     for (const pad of only ?? this.pads.keys()) {
       this.sily?.send({ type: 'clearStretched', pad })
-      for (const key of [...this.stretchedSent]) if (key.startsWith(`${pad}:`)) this.stretchedSent.delete(key)
+      for (const key of [...this.stretched.keys()]) if (key.startsWith(`${pad}:`)) this.stretched.delete(key)
     }
     this.fillStretched()
   }
@@ -342,18 +375,15 @@ export class Session {
       const [s, e] = range.map((f) => this.map.toEngine(f))
       for (const pitch of pitches) {
         const key = `${pad}:${Math.round(pitch * 100)}`
-        if (this.stretchedSent.has(key)) continue
-        this.stretchedSent.add(key)
+        if (this.stretched.has(key)) continue
         const { left, right } = this.engineSample!
         const shifted = this.sily!.pitchShift(left.subarray(s, e), right.subarray(s, e), pitch + tapeSemitones)
         if (p.reverse) {
           shifted.left.reverse()
           shifted.right.reverse()
         }
-        this.sily!.send({ type: 'stretched', pad, pitch, left: shifted.left, right: shifted.right }, [
-          shifted.left.buffer,
-          shifted.right.buffer,
-        ])
+        this.stretched.set(key, { pad, pitch, left: shifted.left, right: shifted.right })
+        this.sily!.send({ type: 'stretched', pad, pitch, left: shifted.left.slice(), right: shifted.right.slice() })
       }
     })
   }

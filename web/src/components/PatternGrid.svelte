@@ -9,6 +9,17 @@
   const pct = (b: number) => `${(wrap(b) / session.lengthBeats) * 100}%`
 
   let drag: { id: string; x: number; width: number } | null = null
+  let loops = $state(4)
+  let exporting = $state(false)
+
+  const exportWav = async () => {
+    exporting = true
+    try {
+      await session.exportWav(loops)
+    } finally {
+      exporting = false
+    }
+  }
 
   const onRowDown = (e: PointerEvent, pad: number) => {
     if (e.target !== e.currentTarget || e.button !== 0) return
@@ -73,7 +84,15 @@
 </div>
 <div class="footer">
   <span class="muted">空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程 / 右クリックで削除</span>
-  <button onclick={() => session.clearPattern()} disabled={session.events.length === 0}>パターン消去</button>
+  <div class="actions">
+    <select bind:value={loops} title="書き出す周回数">
+      {#each [1, 4, 8] as n}<option value={n}>{n}周</option>{/each}
+    </select>
+    <button onclick={exportWav} disabled={exporting || session.events.length === 0}>
+      {exporting ? '書き出し中…' : 'WAV 書き出し'}
+    </button>
+    <button onclick={() => session.clearPattern()} disabled={session.events.length === 0}>パターン消去</button>
+  </div>
 </div>
 
 <style>
@@ -145,6 +164,11 @@
     background: var(--text);
     opacity: 0.6;
     pointer-events: none;
+  }
+
+  .actions {
+    display: flex;
+    gap: 6px;
   }
 
   .footer {

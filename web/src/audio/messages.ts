@@ -9,6 +9,7 @@ export type ToWorklet =
   | { type: 'note'; slice: number; semitones: number; velocity: number }
   | { type: 'audition'; from: number | null }
   | { type: 'transport'; bpm: number; playing: boolean; metronome: boolean; lengthBeats: number }
+  | { type: 'playLimit'; beats: number | null }
   | { type: 'groove'; grid: number; strength: number; swing: number }
   | { type: 'events'; events: { beat: number; pad: number; velocity: number; nudge: number; pitch: number }[] }
   | { type: 'record'; pad: number; velocity: number; pitch: number; time: number }

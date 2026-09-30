@@ -16,10 +16,11 @@ class SilyProcessor extends AudioWorkletProcessor {
   private wasm: SilyExports
   private blocks = 0
 
-  constructor(options: { processorOptions: { module: WebAssembly.Module } }) {
+  constructor(options: { processorOptions: { module: WebAssembly.Module; snapshot?: ToWorklet[] } }) {
     super()
     this.wasm = instantiate(options.processorOptions.module, () => currentTime)
     this.wasm.engine_init(sampleRate, MAX_BLOCK)
+    options.processorOptions.snapshot?.forEach((msg) => this.handle(msg))
     this.port.onmessage = (e: MessageEvent<ToWorklet>) => this.handle(e.data)
   }
 
@@ -60,6 +61,9 @@ class SilyProcessor extends AudioWorkletProcessor {
         w.engine_set_pattern_length(msg.lengthBeats)
         w.engine_set_metronome(msg.metronome ? 1 : 0)
         w.engine_set_playing(msg.playing ? 1 : 0)
+        break
+      case 'playLimit':
+        w.engine_set_play_limit(msg.beats ?? -1)
         break
       case 'groove':
         w.engine_set_groove(msg.grid, msg.strength, msg.swing)

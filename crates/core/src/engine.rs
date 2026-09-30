@@ -62,6 +62,8 @@ pub struct Engine {
     block_beat: f64,
     audition: Option<f64>,
     source_rate: f64,
+    play_limit: Option<f64>,
+    played: f64,
     metronome: bool,
     click_age: Option<usize>,
     out: [Vec<f32>; 2],
@@ -88,6 +90,8 @@ impl Engine {
             block_beat: 0.0,
             audition: None,
             source_rate: 1.0,
+            play_limit: None,
+            played: 0.0,
             metronome: false,
             click_age: None,
             out: [vec![0.0; max_block], vec![0.0; max_block]],
@@ -163,8 +167,13 @@ impl Engine {
     pub fn set_playing(&mut self, playing: bool) {
         if playing && !self.playing {
             self.beat = 0.0;
+            self.played = 0.0;
         }
         self.playing = playing;
+    }
+
+    pub fn set_play_limit(&mut self, beats: Option<f64>) {
+        self.play_limit = beats;
     }
 
     pub fn set_metronome(&mut self, on: bool) {
@@ -215,8 +224,12 @@ impl Engine {
         if self.playing {
             let beats_per_frame = self.beats_per_second() / self.sample_rate;
             let span = frames as f64 * beats_per_frame;
+            let audible_span = match self.play_limit {
+                Some(limit) => span.min((limit - self.played).max(0.0)),
+                None => span,
+            };
             let pending = &mut self.pending;
-            self.pattern.for_each_in_span(self.beat, span, |offset, e| {
+            self.pattern.for_each_in_span(self.beat, audible_span, |offset, e| {
                 if pending.len() < pending.capacity() {
                     pending.push((frame_offset(offset, beats_per_frame, frames), *e));
                 }
@@ -224,13 +237,17 @@ impl Engine {
             if self.metronome {
                 let mut k = self.beat.ceil();
                 let mut n = 0;
-                while k < self.beat + span && n < clicks.len() {
+                while k < self.beat + audible_span && n < clicks.len() {
                     clicks[n] = frame_offset(k - self.beat, beats_per_frame, frames);
                     k += 1.0;
                     n += 1;
                 }
             }
             self.beat = (self.beat + span).rem_euclid(self.pattern.length_beats());
+            self.played += span;
+            if self.play_limit.is_some_and(|limit| self.played >= limit) {
+                self.playing = false;
+            }
         }
         let mut cursor = 0;
         let mut next_event = 0;
@@ -764,5 +781,41 @@ mod tests {
         e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - src[20]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn play_limit_stops_events_at_the_limit() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
+        e.set_play_limit(Some(2.0));
+        e.set_playing(true);
+        let out = render(&mut e, 3000);
+        assert_eq!(first_sound(&out[1500..]).map(|i| i + 1500), None);
+    }
+
+    #[test]
+    fn play_limit_keeps_events_before_the_limit() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
+        e.set_play_limit(Some(2.0));
+        e.set_playing(true);
+        let out = render(&mut e, 3000);
+        assert_eq!(first_sound(&out[500..]).map(|i| i + 500), Some(1000));
+    }
+
+    #[test]
+    fn play_limit_lets_sounding_voices_ring_out() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.add_event(Event { beat: 0.5, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
+        e.set_play_limit(Some(1.0));
+        e.set_playing(true);
+        let out = render(&mut e, 1400);
+        assert!(out[1200].abs() > 0.1);
     }
 }

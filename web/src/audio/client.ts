@@ -13,6 +13,7 @@ export class Sily {
 
   private constructor(
     readonly ctx: AudioContext,
+    private module: WebAssembly.Module,
     private node: AudioWorkletNode,
     private analysis: SilyExports,
     readonly analyser: AnalyserNode,
@@ -39,7 +40,7 @@ export class Sily {
     const analyser = ctx.createAnalyser()
     node.connect(analyser)
     analyser.connect(ctx.destination)
-    return new Sily(ctx, node, instantiate(module, () => performance.now() / 1000), analyser)
+    return new Sily(ctx, module, node, instantiate(module, () => performance.now() / 1000), analyser)
   }
 
   get sampleRate() {
@@ -48,6 +49,23 @@ export class Sily {
 
   send(msg: ToWorklet, transfer: Transferable[] = []) {
     this.node.port.postMessage(msg, transfer)
+  }
+
+  async renderOffline(snapshot: ToWorklet[], seconds: number): Promise<{ left: Float32Array; right: Float32Array }> {
+    const ctx = new OfflineAudioContext({
+      numberOfChannels: 2,
+      length: Math.ceil(seconds * this.sampleRate),
+      sampleRate: this.sampleRate,
+    })
+    await ctx.audioWorklet.addModule(workletUrl)
+    const node = new AudioWorkletNode(ctx, 'sily', {
+      numberOfInputs: 0,
+      outputChannelCount: [2],
+      processorOptions: { module: this.module, snapshot },
+    })
+    node.connect(ctx.destination)
+    const out = await ctx.startRendering()
+    return { left: out.getChannelData(0), right: out.getChannelData(1) }
   }
 
   audibleTime(timeStamp: number): number {

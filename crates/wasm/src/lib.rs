@@ -194,3 +194,8 @@ pub unsafe extern "C" fn stretch(left: *const f32, right: *const f32, frames: u3
     }
     RESULT_AUDIO[0].len().min(RESULT_AUDIO[1].len()) as u32
 }
+
+#[no_mangle]
+pub extern "C" fn engine_set_play_limit(beats: f64) {
+    engine().set_play_limit((beats >= 0.0).then_some(beats));
+}
