@@ -35,3 +35,12 @@ export const shiftPitch = (events: PadEvent[], id: string, delta: number): PadEv
   events.map((e) =>
     e.id === id ? { ...e, pitch: Math.max(-PITCH_RANGE, Math.min(PITCH_RANGE, e.pitch + delta)), auto: false } : e,
   )
+
+const MIN_VELOCITY = 0.05
+
+export const changeVelocity = (events: PadEvent[], id: string, delta: number): PadEvent[] =>
+  events.map((e) =>
+    e.id === id
+      ? { ...e, velocity: Math.round(Math.max(MIN_VELOCITY, Math.min(1, e.velocity + delta)) * 100) / 100, auto: false }
+      : e,
+  )

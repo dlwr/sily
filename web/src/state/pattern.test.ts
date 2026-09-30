@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 
 const at = (beat: number, pad = 0, id = `${pad}@${beat}`): PadEvent => ({ id, beat, pad, velocity: 1, nudge: 0, pitch: 0 })
 
@@ -64,5 +64,22 @@ describe('editing generated notes', () => {
 
   it('claims a generated note once its pitch changes', () => {
     expect(shiftPitch([{ ...at(1, 0, 'a'), auto: true }], 'a', 1)[0].auto).toBe(false)
+  })
+})
+
+describe('changeVelocity', () => {
+  it('changes only the matching event', () => {
+    const next = changeVelocity([at(1, 0, 'a'), at(2, 0, 'b')], 'a', -0.25)
+    expect(next.map((e) => e.velocity)).toEqual([0.75, 1])
+  })
+
+  it('stays audible and never exceeds full', () => {
+    const quiet = changeVelocity([{ ...at(1, 0, 'a'), velocity: 0.1 }], 'a', -1)[0].velocity
+    const loud = changeVelocity([at(1, 0, 'a')], 'a', 1)[0].velocity
+    expect([quiet, loud]).toEqual([0.05, 1])
+  })
+
+  it('claims a generated note', () => {
+    expect(changeVelocity([{ ...at(1, 0, 'a'), auto: true }], 'a', -0.1)[0].auto).toBe(false)
   })
 })
