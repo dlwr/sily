@@ -4,6 +4,8 @@
   let { session }: { session: Session } = $props()
 
   const pad = $derived(session.pads[session.selectedPad])
+  const semitones = $derived(Math.round(pad.pitch))
+  const cents = $derived(Math.round((pad.pitch - semitones) * 100))
 </script>
 
 <section>
@@ -15,10 +17,22 @@
       min="-24"
       max="24"
       step="1"
-      value={pad.pitch}
-      onchange={(e) => session.setPad(session.selectedPad, { pitch: Number(e.currentTarget.value) })}
+      value={semitones}
+      onchange={(e) => session.setPad(session.selectedPad, { pitch: Number(e.currentTarget.value) + cents / 100 })}
     />
-    <span class="num">{pad.pitch > 0 ? '+' : ''}{pad.pitch}</span>
+    <span class="num">{semitones > 0 ? '+' : ''}{semitones}</span>
+  </label>
+  <label>
+    微調整
+    <input
+      type="range"
+      min="-50"
+      max="50"
+      step="1"
+      value={cents}
+      onchange={(e) => session.setPad(session.selectedPad, { pitch: semitones + Number(e.currentTarget.value) / 100 })}
+    />
+    <span class="num">{cents > 0 ? '+' : ''}{cents}¢</span>
   </label>
   <label>
     音量
@@ -40,6 +54,9 @@
       長さを保つ
     </button>
   </div>
+  <button aria-pressed={pad.reverse} onclick={() => session.setPad(session.selectedPad, { reverse: !pad.reverse })}>
+    逆再生
+  </button>
   <button aria-pressed={session.keyboardMode} onclick={() => (session.keyboardMode = !session.keyboardMode)}>
     鍵盤モード <kbd>Tab</kbd>
   </button>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { nudgeEvent, recordHit, removeEvent, toggleStep, type PadEvent } from './pattern'
+import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 
-const at = (beat: number, pad = 0, id = `${pad}@${beat}`): PadEvent => ({ id, beat, pad, velocity: 1, nudge: 0 })
+const at = (beat: number, pad = 0, id = `${pad}@${beat}`): PadEvent => ({ id, beat, pad, velocity: 1, nudge: 0, pitch: 0 })
 
 describe('toggleStep', () => {
   it('adds an event on an empty step', () => {
@@ -23,6 +23,10 @@ describe('recordHit', () => {
     expect(recordHit([], 5, 0.4137, 0.8)[0]).toMatchObject({ pad: 5, beat: 0.4137, velocity: 0.8, nudge: 0 })
   })
 
+  it('keeps the pitch of a keyboard hit', () => {
+    expect(recordHit([], 5, 0.5, 1, 7)[0].pitch).toBe(7)
+  })
+
   it('gives each hit a distinct id', () => {
     const events = recordHit(recordHit([], 5, 0.5, 1), 5, 0.5, 1)
     expect(new Set(events.map((e) => e.id)).size).toBe(2)
@@ -39,5 +43,16 @@ describe('nudgeEvent', () => {
 describe('removeEvent', () => {
   it('drops the matching event', () => {
     expect(removeEvent([at(1, 0, 'a'), at(2, 0, 'b')], 'a').map((e) => e.id)).toEqual(['b'])
+  })
+})
+
+describe('shiftPitch', () => {
+  it('moves only the matching event', () => {
+    const next = shiftPitch([at(1, 0, 'a'), at(2, 0, 'b')], 'a', 2)
+    expect(next.map((e) => e.pitch)).toEqual([2, 0])
+  })
+
+  it('stays within two octaves', () => {
+    expect(shiftPitch([{ ...at(1, 0, 'a'), pitch: 23 }], 'a', 5)[0].pitch).toBe(24)
   })
 })

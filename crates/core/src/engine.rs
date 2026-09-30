@@ -9,13 +9,14 @@ const MAX_EVENTS: usize = 4096;
 struct Pad {
     pitch: f64,
     gain: f32,
-    stretched: Option<[Vec<f32>; 2]>,
+    reverse: bool,
+    stretched: Vec<(i64, [Vec<f32>; 2])>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Source {
     Sample,
-    Pad(usize),
+    Stretched(usize, usize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +25,7 @@ struct Voice {
     pad: Option<usize>,
     source: Source,
     pos: f64,
+    start: f64,
     end: f64,
     rate: f64,
     gain: f32,
@@ -37,6 +39,7 @@ impl Voice {
         pad: None,
         source: Source::Sample,
         pos: 0.0,
+        start: 0.0,
         end: 0.0,
         rate: 1.0,
         gain: 0.0,
@@ -58,6 +61,7 @@ pub struct Engine {
     block_time: f64,
     block_beat: f64,
     audition: Option<f64>,
+    source_rate: f64,
     metronome: bool,
     click_age: Option<usize>,
     out: [Vec<f32>; 2],
@@ -83,6 +87,7 @@ impl Engine {
             block_time: 0.0,
             block_beat: 0.0,
             audition: None,
+            source_rate: 1.0,
             metronome: false,
             click_age: None,
             out: [vec![0.0; max_block], vec![0.0; max_block]],
@@ -103,38 +108,44 @@ impl Engine {
         self.markers = markers;
     }
 
-    pub fn set_pad(&mut self, pad: usize, pitch: f64, gain: f32) {
+    pub fn set_pad(&mut self, pad: usize, pitch: f64, gain: f32, reverse: bool) {
         if let Some(p) = self.pads.get_mut(pad) {
             p.pitch = pitch;
             p.gain = gain;
+            p.reverse = reverse;
         }
     }
 
-    pub fn set_pad_stretched(&mut self, pad: usize, buffer: Option<[Vec<f32>; 2]>) {
+    pub fn set_pad_stretched(&mut self, pad: usize, pitch: f64, buffer: Option<[Vec<f32>; 2]>) {
+        let Some(p) = self.pads.get_mut(pad) else { return };
+        let key = cents(pitch);
+        p.stretched.retain(|(k, _)| *k != key);
+        if let Some(buffer) = buffer {
+            p.stretched.push((key, buffer));
+        }
+        self.voices.iter_mut().filter(|v| matches!(v.source, Source::Stretched(vp, _) if vp == pad)).for_each(|v| v.sounding = false);
+    }
+
+    pub fn clear_pad_stretched(&mut self, pad: usize) {
         if let Some(p) = self.pads.get_mut(pad) {
-            p.stretched = buffer;
+            p.stretched.clear();
         }
+        self.voices.iter_mut().filter(|v| matches!(v.source, Source::Stretched(vp, _) if vp == pad)).for_each(|v| v.sounding = false);
     }
 
-    pub fn trigger(&mut self, pad: usize, velocity: f32) {
-        self.start_pad(pad, velocity);
+    pub fn set_source_rate(&mut self, rate: f64) {
+        self.source_rate = rate.clamp(0.1, 4.0);
+    }
+
+    pub fn trigger(&mut self, pad: usize, velocity: f32, pitch: f64) {
+        self.start_pad(pad, velocity, pitch);
     }
 
     pub fn trigger_note(&mut self, slice: usize, semitones: f64, velocity: f32) {
-        let Some(range) = self.slice(slice) else { return };
-        let pitch = self.pads[slice].pitch + semitones;
-        let gain = self.pads[slice].gain * velocity;
-        self.start_voice(Voice {
-            sounding: true,
-            pad: None,
-            source: Source::Sample,
-            pos: range.start as f64,
-            end: range.end as f64,
-            rate: semitone_rate(pitch),
-            gain,
-            age: 0,
-            release: None,
-        });
+        if let Some(mut voice) = self.voice_for(slice, velocity, semitones) {
+            voice.pad = None;
+            self.start_voice(voice);
+        }
     }
 
     pub fn audition(&mut self, from_frame: Option<usize>) {
@@ -234,7 +245,7 @@ impl Engine {
             }
             if event_at == at {
                 let (_, e) = self.pending[next_event];
-                self.start_pad(e.pad as usize, e.velocity);
+                self.start_pad(e.pad as usize, e.velocity, e.pitch);
                 next_event += 1;
             } else {
                 if let Some(c) = clicks.iter_mut().find(|c| **c == at) {
@@ -265,41 +276,30 @@ impl Engine {
         slices(&self.markers, self.sample[0].len()).into_iter().nth(index)
     }
 
-    fn start_pad(&mut self, pad: usize, velocity: f32) {
-        let Some(p) = self.pads.get(pad) else { return };
-        let gain = p.gain * velocity;
-        let voice = match &p.stretched {
-            Some(buf) => Voice {
-                sounding: true,
-                pad: Some(pad),
-                source: Source::Pad(pad),
-                pos: 0.0,
-                end: buf[0].len() as f64,
-                rate: 1.0,
-                gain,
-                age: 0,
-                release: None,
-            },
-            None => {
-                let pitch = p.pitch;
-                let Some(range) = self.slice(pad) else { return };
-                Voice {
-                    sounding: true,
-                    pad: Some(pad),
-                    source: Source::Sample,
-                    pos: range.start as f64,
-                    end: range.end as f64,
-                    rate: semitone_rate(pitch),
-                    gain,
-                    age: 0,
-                    release: None,
-                }
-            }
-        };
+    fn start_pad(&mut self, pad: usize, velocity: f32, pitch: f64) {
+        let Some(voice) = self.voice_for(pad, velocity, pitch) else { return };
         for v in self.voices.iter_mut().filter(|v| v.sounding && v.pad == Some(pad)) {
             v.release.get_or_insert(0);
         }
         self.start_voice(voice);
+    }
+
+    fn voice_for(&self, pad: usize, velocity: f32, pitch: f64) -> Option<Voice> {
+        let p = self.pads.get(pad)?;
+        let total = p.pitch + pitch;
+        let base = Voice { sounding: true, pad: Some(pad), gain: p.gain * velocity, ..Voice::SILENT };
+        if let Some(i) = p.stretched.iter().position(|(k, _)| *k == cents(total)) {
+            let len = p.stretched[i].1[0].len() as f64;
+            return Some(Voice { source: Source::Stretched(pad, i), pos: 0.0, start: 0.0, end: len, rate: 1.0, ..base });
+        }
+        let range = self.slice(pad)?;
+        let rate = semitone_rate(total) * self.source_rate;
+        let (start, end) = (range.start as f64, range.end as f64);
+        Some(if p.reverse {
+            Voice { source: Source::Sample, pos: end - 1.0, start, end, rate: -rate, ..base }
+        } else {
+            Voice { source: Source::Sample, pos: start, start, end, rate, ..base }
+        })
     }
 
     fn start_voice(&mut self, voice: Voice) {
@@ -319,8 +319,8 @@ impl Engine {
         for v in self.voices.iter_mut().filter(|v| v.sounding) {
             let buf = match v.source {
                 Source::Sample => &self.sample,
-                Source::Pad(p) => match &self.pads[p].stretched {
-                    Some(b) => b,
+                Source::Stretched(p, i) => match self.pads[p].stretched.get(i) {
+                    Some((_, b)) => b,
                     None => {
                         v.sounding = false;
                         continue;
@@ -328,7 +328,7 @@ impl Engine {
                 },
             };
             for i in from..to {
-                if v.pos >= v.end || v.release.is_some_and(|r| r >= fade_out) {
+                if v.pos >= v.end || v.pos < v.start || v.release.is_some_and(|r| r >= fade_out) {
                     v.sounding = false;
                     break;
                 }
@@ -336,7 +336,7 @@ impl Engine {
                 if v.age < fade_in {
                     g *= (v.age + 1) as f32 / (fade_in + 1) as f32;
                 }
-                let remaining = (v.end - v.pos) / v.rate;
+                let remaining = if v.rate > 0.0 { (v.end - v.pos) / v.rate } else { (v.pos - v.start) / -v.rate };
                 if remaining < fade_out as f64 {
                     g *= (remaining / fade_out as f64) as f32;
                 }
@@ -359,7 +359,7 @@ impl Engine {
                 }
                 self.out[0][i] += read(&self.sample[0], *pos);
                 self.out[1][i] += read(&self.sample[1], *pos);
-                *pos += 1.0;
+                *pos += self.source_rate;
             }
         }
         if let Some(age) = self.click_age.as_mut() {
@@ -392,6 +392,10 @@ fn soft_clip(x: f32) -> f32 {
     } else {
         x.signum() * (KNEE + (1.0 - KNEE) * ((x.abs() - KNEE) / (1.0 - KNEE)).tanh())
     }
+}
+
+fn cents(semitones: f64) -> i64 {
+    (semitones * 100.0).round() as i64
 }
 
 fn semitone_rate(semitones: f64) -> f64 {
@@ -449,7 +453,7 @@ mod tests {
         let src = ramp(1000);
         let mut e = engine_with(src.clone());
         e.set_markers(vec![0, 300, 600]);
-        e.trigger(1, 1.0);
+        e.trigger(1, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - src[320]).abs() < 1e-4, "{} vs {}", out[20], src[320]);
     }
@@ -458,7 +462,7 @@ mod tests {
     fn slice_stops_at_the_next_marker() {
         let mut e = engine_with(vec![0.5; 1000]);
         e.set_markers(vec![0, 300, 600]);
-        e.trigger(1, 1.0);
+        e.trigger(1, 1.0, 0.0);
         let out = render(&mut e, 400);
         assert!(out[300].abs() < 1e-6);
     }
@@ -468,8 +472,8 @@ mod tests {
         let src = ramp(1000);
         let mut e = engine_with(src.clone());
         e.set_markers(vec![0, 600]);
-        e.set_pad(0, 12.0, 1.0);
-        e.trigger(0, 1.0);
+        e.set_pad(0, 12.0, 1.0, false);
+        e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - src[40]).abs() < 1e-4);
     }
@@ -478,8 +482,8 @@ mod tests {
     fn octave_up_ends_the_slice_in_half_the_time() {
         let mut e = engine_with(vec![0.5; 1000]);
         e.set_markers(vec![0, 600]);
-        e.set_pad(0, 12.0, 1.0);
-        e.trigger(0, 1.0);
+        e.set_pad(0, 12.0, 1.0, false);
+        e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 400);
         assert!(out[305].abs() < 1e-6);
     }
@@ -487,7 +491,7 @@ mod tests {
     #[test]
     fn velocity_scales_the_output() {
         let mut e = engine_with(vec![0.5; 1000]);
-        e.trigger(0, 0.5);
+        e.trigger(0, 0.5, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - 0.25).abs() < 1e-4);
     }
@@ -496,16 +500,16 @@ mod tests {
     fn pad_without_a_slice_is_silent() {
         let mut e = engine_with(vec![0.5; 1000]);
         e.set_markers(vec![0, 500]);
-        e.trigger(5, 1.0);
+        e.trigger(5, 1.0, 0.0);
         assert_eq!(first_sound(&render(&mut e, 50)), None);
     }
 
     #[test]
     fn retriggering_a_pad_chokes_its_previous_voice() {
         let mut e = engine_with(vec![0.5; 1000]);
-        e.trigger(0, 1.0);
+        e.trigger(0, 1.0, 0.0);
         render(&mut e, 10);
-        e.trigger(0, 1.0);
+        e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[30] - 0.5).abs() < 1e-4, "{}", out[30]);
     }
@@ -523,8 +527,8 @@ mod tests {
     #[test]
     fn stretched_pad_plays_its_own_buffer() {
         let mut e = engine_with(vec![0.5; 1000]);
-        e.set_pad_stretched(0, Some([vec![0.1; 800], vec![0.1; 800]]));
-        e.trigger(0, 1.0);
+        e.set_pad_stretched(0, 0.0, Some([vec![0.1; 800], vec![0.1; 800]]));
+        e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - 0.1).abs() < 1e-4);
     }
@@ -534,7 +538,7 @@ mod tests {
         let mut e = engine_with(vec![0.5; 1000]);
         e.set_bpm(60.0);
         e.set_pattern_length(1.0);
-        e.add_event(Event { beat: 0.5, pad: 0, velocity: 1.0, nudge: 0.0 });
+        e.add_event(Event { beat: 0.5, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
         e.set_playing(true);
         assert_eq!(first_sound(&render(&mut e, 1000)), Some(500));
     }
@@ -544,7 +548,7 @@ mod tests {
         let mut e = engine_with(vec![0.5; 10]);
         e.set_bpm(60.0);
         e.set_pattern_length(1.0);
-        e.add_event(Event { beat: 0.03, pad: 0, velocity: 1.0, nudge: 0.0 });
+        e.add_event(Event { beat: 0.03, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
         e.set_playing(true);
         let out = render(&mut e, 1100);
         assert_eq!(first_sound(&out[500..]).map(|i| i + 500), Some(1030));
@@ -555,7 +559,7 @@ mod tests {
         let mut e = engine_with(vec![0.5; 10]);
         e.set_bpm(60.0);
         e.set_pattern_length(1.0);
-        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0 });
+        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
         e.set_playing(true);
         let out = render(&mut e, 2100);
         assert_eq!(first_sound(&out), Some(0));
@@ -566,7 +570,7 @@ mod tests {
     #[test]
     fn stopped_transport_ignores_the_pattern() {
         let mut e = engine_with(vec![0.5; 1000]);
-        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0 });
+        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
         assert_eq!(first_sound(&render(&mut e, 500)), None);
     }
 
@@ -636,7 +640,7 @@ mod tests {
         let mut e = engine_with(vec![1.0; 1000]);
         e.set_markers((0..16).map(|i| i * 10).collect());
         for pad in 0..16 {
-            e.trigger(pad, 1.0);
+            e.trigger(pad, 1.0, 0.0);
         }
         let out = render(&mut e, 20);
         assert!(out.iter().all(|s| s.abs() <= 1.0), "{:?}", out);
@@ -645,8 +649,120 @@ mod tests {
     #[test]
     fn quiet_signals_pass_unchanged() {
         let mut e = engine_with(vec![0.6; 1000]);
-        e.trigger(0, 1.0);
+        e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn note_pitch_adds_to_the_pad_pitch() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 600]);
+        e.set_pad(0, 5.0, 1.0, false);
+        e.trigger(0, 1.0, 7.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[40]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pattern_event_carries_its_pitch() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 600]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.add_event(Event { beat: 0.0, pad: 0, velocity: 1.0, nudge: 0.0, pitch: 12.0 });
+        e.set_playing(true);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[40]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn fractional_semitones_detune_the_rate() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 900]);
+        e.set_pad(0, 0.5, 1.0, false);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 200);
+        let expected = 100.0 * 2f64.powf(0.5 / 12.0);
+        assert!((out[100] as f64 - expected / 1000.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn reversed_pad_plays_its_slice_backwards() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 600]);
+        e.set_pad(0, 0.0, 1.0, true);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[579]).abs() < 1e-4, "{} vs {}", out[20], src[579]);
+    }
+
+    #[test]
+    fn reversed_pad_stops_at_the_slice_start() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_markers(vec![300, 600]);
+        e.set_pad(0, 0.0, 1.0, true);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 400);
+        assert!(out[300].abs() < 1e-6);
+    }
+
+    #[test]
+    fn source_rate_speeds_up_pads() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 600]);
+        e.set_source_rate(2.0);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[40]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn source_rate_speeds_up_audition() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_source_rate(0.5);
+        e.audition(Some(0));
+        let out = render(&mut e, 100);
+        assert!((out[80] - src[40]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn stretched_buffer_is_chosen_by_total_pitch() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_pad(0, 5.0, 1.0, false);
+        e.set_pad_stretched(0, 5.0, Some([vec![0.1; 800], vec![0.1; 800]]));
+        e.set_pad_stretched(0, 12.0, Some([vec![0.2; 800], vec![0.2; 800]]));
+        e.trigger(0, 1.0, 7.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - 0.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn missing_stretched_pitch_falls_back_to_varispeed() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 600]);
+        e.set_pad_stretched(0, 0.0, Some([vec![0.1; 800], vec![0.1; 800]]));
+        e.trigger(0, 1.0, 12.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[40]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn clearing_stretched_buffers_returns_to_varispeed() {
+        let src = ramp(1000);
+        let mut e = engine_with(src.clone());
+        e.set_markers(vec![0, 600]);
+        e.set_pad_stretched(0, 0.0, Some([vec![0.1; 800], vec![0.1; 800]]));
+        e.clear_pad_stretched(0);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[20]).abs() < 1e-4);
     }
 }

@@ -33,18 +33,21 @@ class SilyProcessor extends AudioWorkletProcessor {
         withU32(w, msg.frames, (ptr) => w.engine_set_markers(ptr, msg.frames.length))
         break
       case 'pad':
-        w.engine_set_pad(msg.pad, msg.pitch, msg.gain)
+        w.engine_set_pad(msg.pad, msg.pitch, msg.gain, msg.reverse ? 1 : 0)
         break
-      case 'stretched':
-        if (msg.left && msg.right) {
-          const frames = msg.left.length
-          withFloats(w, [msg.left, msg.right], ([l, r]) => w.engine_set_pad_stretched(msg.pad, l, r, frames))
-        } else {
-          w.engine_set_pad_stretched(msg.pad, 0, 0, 0)
-        }
+      case 'stretched': {
+        const frames = msg.left.length
+        withFloats(w, [msg.left, msg.right], ([l, r]) => w.engine_set_pad_stretched(msg.pad, msg.pitch, l, r, frames))
+        break
+      }
+      case 'clearStretched':
+        w.engine_clear_pad_stretched(msg.pad)
+        break
+      case 'sourceRate':
+        w.engine_set_source_rate(msg.rate)
         break
       case 'trigger':
-        w.engine_trigger(msg.pad, msg.velocity)
+        w.engine_trigger(msg.pad, msg.velocity, msg.pitch)
         break
       case 'note':
         w.engine_trigger_note(msg.slice, msg.semitones, msg.velocity)
@@ -63,10 +66,16 @@ class SilyProcessor extends AudioWorkletProcessor {
         break
       case 'events':
         w.engine_clear_events()
-        for (const e of msg.events) w.engine_add_event(e.beat, e.pad, e.velocity, e.nudge)
+        for (const e of msg.events) w.engine_add_event(e.beat, e.pad, e.velocity, e.nudge, e.pitch)
         break
       case 'record':
-        this.post({ type: 'recorded', pad: msg.pad, velocity: msg.velocity, beat: w.engine_beat_at_time(msg.time) })
+        this.post({
+          type: 'recorded',
+          pad: msg.pad,
+          velocity: msg.velocity,
+          pitch: msg.pitch,
+          beat: w.engine_beat_at_time(msg.time),
+        })
         break
     }
   }
