@@ -1,4 +1,7 @@
+import type { FxSettings } from '../fx/fx'
+
 export type ToWorklet =
+  | { type: 'fx'; pad: number | null; fx: FxSettings }
   | { type: 'load'; left: Float32Array; right: Float32Array }
   | { type: 'markers'; frames: number[] }
   | { type: 'padSlices'; slices: number[] }

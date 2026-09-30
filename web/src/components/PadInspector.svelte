@@ -1,6 +1,7 @@
 <script lang="ts">
   import { CATEGORIES, CATEGORY_LABELS, type Category } from '../classify/categories'
   import type { Session } from '../state/session.svelte'
+  import PadFx from './PadFx.svelte'
 
   let { session }: { session: Session } = $props()
 
@@ -75,6 +76,7 @@
     </select>
     <span class="num muted">{pad.choke > 0 ? pad.choke : ''}</span>
   </label>
+  <PadFx {session} />
   <div class="modes" role="radiogroup" aria-label="ピッチの扱い">
     <button aria-pressed={!pad.stretch} onclick={() => session.setPad(session.selectedPad, { stretch: false })}>
       速度と連動

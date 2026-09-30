@@ -1,3 +1,4 @@
+use crate::fx::{FxChain, FxSettings};
 use crate::sequencer::{Event, Groove, Pattern};
 use crate::slicing::slices;
 
@@ -24,6 +25,7 @@ enum Source {
 struct Voice {
     sounding: bool,
     pad: Option<usize>,
+    bus: usize,
     source: Source,
     pos: f64,
     start: f64,
@@ -38,6 +40,7 @@ impl Voice {
     const SILENT: Voice = Voice {
         sounding: false,
         pad: None,
+        bus: 0,
         source: Source::Sample,
         pos: 0.0,
         start: 0.0,
@@ -71,6 +74,9 @@ pub struct Engine {
     click_age: Option<usize>,
     click_accent: bool,
     out: [Vec<f32>; 2],
+    buses: Vec<[Vec<f32>; 2]>,
+    pad_fx: Vec<FxChain>,
+    master_fx: FxChain,
     pending: Vec<(usize, Event)>,
     fade_in: usize,
     fade_out: usize,
@@ -102,6 +108,9 @@ impl Engine {
             click_age: None,
             click_accent: false,
             out: [vec![0.0; max_block], vec![0.0; max_block]],
+            buses: (0..PADS).map(|_| [vec![0.0; max_block], vec![0.0; max_block]]).collect(),
+            pad_fx: (0..PADS).map(|_| FxChain::new(sample_rate as f32)).collect(),
+            master_fx: FxChain::new(sample_rate as f32),
             pending: Vec::with_capacity(MAX_EVENTS),
             fade_in: ((sample_rate * 0.002) as usize).max(1),
             fade_out: ((sample_rate * 0.004) as usize).max(1),
@@ -264,6 +273,10 @@ impl Engine {
         for ch in &mut self.out {
             ch[..frames].fill(0.0);
         }
+        for bus in &mut self.buses {
+            bus[0][..frames].fill(0.0);
+            bus[1][..frames].fill(0.0);
+        }
         self.pending.clear();
         let mut clicks = [usize::MAX; 8];
         let mut accents = [false; 8];
@@ -334,7 +347,31 @@ impl Engine {
                 self.click_age = Some(0);
             }
         }
+        self.mix_buses(frames);
         self.limit(frames);
+    }
+
+    pub fn set_pad_fx(&mut self, pad: usize, settings: FxSettings) {
+        if let Some(fx) = self.pad_fx.get_mut(pad) {
+            fx.set(settings);
+        }
+    }
+
+    pub fn set_master_fx(&mut self, settings: FxSettings) {
+        self.master_fx.set(settings);
+    }
+
+    fn mix_buses(&mut self, frames: usize) {
+        for (bus, fx) in self.buses.iter_mut().zip(&mut self.pad_fx) {
+            let [l, r] = bus;
+            fx.process(&mut l[..frames], &mut r[..frames]);
+            for i in 0..frames {
+                self.out[0][i] += l[i];
+                self.out[1][i] += r[i];
+            }
+        }
+        let [l, r] = &mut self.out;
+        self.master_fx.process(&mut l[..frames], &mut r[..frames]);
     }
 
     fn limit(&mut self, frames: usize) {
@@ -370,7 +407,7 @@ impl Engine {
     fn voice_for(&self, pad: usize, velocity: f32, pitch: f64) -> Option<Voice> {
         let p = self.pads.get(pad)?;
         let total = p.pitch + pitch;
-        let base = Voice { sounding: true, pad: Some(pad), gain: p.gain * velocity, ..Voice::SILENT };
+        let base = Voice { sounding: true, pad: Some(pad), bus: pad, gain: p.gain * velocity, ..Voice::SILENT };
         if let Some(i) = p.stretched.iter().position(|(k, _)| *k == cents(total)) {
             let len = p.stretched[i].1[0].len() as f64;
             return Some(Voice { source: Source::Stretched(pad, i), pos: 0.0, start: 0.0, end: len, rate: 1.0, ..base });
@@ -427,8 +464,9 @@ impl Engine {
                     g *= 1.0 - *r as f32 / fade_out as f32;
                     *r += 1;
                 }
-                self.out[0][i] += read(&buf[0], v.pos) * g;
-                self.out[1][i] += read(&buf[1], v.pos) * g;
+                let bus = &mut self.buses[v.bus];
+                bus[0][i] += read(&buf[0], v.pos) * g;
+                bus[1][i] += read(&buf[1], v.pos) * g;
                 v.pos += v.rate;
                 v.age += 1;
             }
@@ -1046,5 +1084,67 @@ mod tests {
         let out = render(&mut e, 4000);
         let onsets: Vec<usize> = (0..8).filter_map(|i| first_sound(&out[i * 500..i * 500 + 50]).map(|o| o + i * 500)).collect();
         assert_eq!(onsets, (0..8).map(|i| i * 500).collect::<Vec<_>>());
+    }
+
+    fn engine_44k(sample: Vec<f32>) -> Engine {
+        let mut e = Engine::new(44_100.0, 4096);
+        e.load_sample(sample.clone(), sample);
+        e
+    }
+
+    fn render_44k(e: &mut Engine, frames: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        let mut time = 0.0;
+        let mut left = frames;
+        while left > 0 {
+            let n = left.min(128);
+            e.process(n, time);
+            out.extend_from_slice(&e.output(0)[..n]);
+            time += n as f64 / 44_100.0;
+            left -= n;
+        }
+        out
+    }
+
+    fn low_tone(frames: usize) -> Vec<f32> {
+        (0..frames).map(|i| (2.0 * std::f32::consts::PI * 40.0 * i as f32 / 44_100.0).sin() * 0.3).collect()
+    }
+
+    #[test]
+    fn pad_fx_shape_that_pad() {
+        let mut e = engine_44k(low_tone(44_100));
+        e.set_pad_fx(0, FxSettings { highpass_hz: 800.0, ..Default::default() });
+        e.trigger(0, 1.0, 0.0);
+        let out = render_44k(&mut e, 22_050);
+        assert!(out[11_025..].iter().all(|v| v.abs() < 0.01));
+    }
+
+    #[test]
+    fn pad_fx_leave_other_pads_alone() {
+        let mut e = engine_44k(low_tone(44_100));
+        e.set_markers(vec![0, 22_050]);
+        e.set_pad_fx(1, FxSettings { highpass_hz: 800.0, ..Default::default() });
+        e.trigger(0, 1.0, 0.0);
+        let out = render_44k(&mut e, 11_025);
+        assert!(out[5_000..].iter().fold(0.0f32, |m, v| m.max(v.abs())) > 0.25);
+    }
+
+    #[test]
+    fn keyboard_notes_go_through_their_pad_fx() {
+        let mut e = engine_44k(low_tone(44_100));
+        e.set_pad_fx(0, FxSettings { highpass_hz: 800.0, ..Default::default() });
+        e.trigger_note(0, 0.0, 1.0);
+        let out = render_44k(&mut e, 22_050);
+        assert!(out[11_025..].iter().all(|v| v.abs() < 0.01));
+    }
+
+    #[test]
+    fn master_maximizer_raises_quiet_mixes_under_its_ceiling() {
+        let mut e = engine_44k(low_tone(44_100));
+        e.set_master_fx(FxSettings { drive_db: 12.0, ceiling_db: -1.0, ..Default::default() });
+        e.trigger(0, 1.0, 0.0);
+        let out = render_44k(&mut e, 22_050);
+        let peak = out[11_025..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.5 && peak <= 10f32.powf(-1.0 / 20.0) + 1e-4, "{peak}");
     }
 }

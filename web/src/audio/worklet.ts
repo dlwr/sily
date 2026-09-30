@@ -33,6 +33,13 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'markers':
         withU32(w, msg.frames, (ptr) => w.engine_set_markers(ptr, msg.frames.length))
         break
+      case 'fx': {
+        const f = msg.fx
+        const args = [f.highpass_hz, f.lowpass_hz, f.low_db, f.mid_db, f.mid_hz, f.high_db, f.drive_db, f.ceiling_db] as const
+        if (msg.pad === null) w.engine_set_master_fx(...args)
+        else w.engine_set_pad_fx(msg.pad, ...args)
+        break
+      }
       case 'padSlices':
         msg.slices.forEach((slice, pad) => w.engine_set_pad_slice(pad, slice))
         break

@@ -3,6 +3,7 @@ import type { ToWorklet } from '../audio/messages'
 import { arrangePads, remapEvents, type Category } from '../classify/categories'
 import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
+import { DEFAULT_FX, type FxSettings } from '../fx/fx'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
@@ -18,6 +19,7 @@ export type PadSettings = {
   reverse: boolean
   choke: number
   chokeAuto: boolean
+  fx: FxSettings
 }
 export type Label = {
   category: Category
@@ -52,7 +54,7 @@ export class Session {
   sample = $state.raw<Sample | null>(null)
   markers = $state<number[]>([])
   pads = $state<PadSettings[]>(
-    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true })),
+    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX } })),
   )
   selectedPad = $state(0)
   events = $state<PadEvent[]>([])
@@ -83,6 +85,7 @@ export class Session {
   previewing = $state<number | null>(null)
   refining = $state(false)
   processing = $state(0)
+  masterFx = $state<FxSettings>({ ...DEFAULT_FX })
   private beforeGenerate: PadEvent[] | null = null
   private clap = new ClapClient()
   private refineGeneration = 0
@@ -320,7 +323,7 @@ export class Session {
   private applyPadSlices(after: number[]) {
     this.adopt()
     const before = this.padSlices
-    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true })
+    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX } })
     this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
     this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
     this.padSlices = after
@@ -349,6 +352,18 @@ export class Session {
   private sendPad(pad: number) {
     const p = this.pads[pad]
     this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })
+    this.sily?.send({ type: 'fx', pad, fx: $state.snapshot(p.fx) })
+  }
+
+  setPadFx(pad: number, patch: Partial<FxSettings>) {
+    this.checkpoint(`fx:${pad}:${Object.keys(patch).join()}`)
+    this.pads[pad].fx = { ...this.pads[pad].fx, ...patch }
+    this.sendPad(pad)
+  }
+
+  setMasterFx(patch: Partial<FxSettings>) {
+    this.masterFx = { ...this.masterFx, ...patch }
+    this.sily?.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
   }
 
   private autoChoke() {
@@ -688,6 +703,8 @@ export class Session {
       { type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) },
       { type: 'padSlices', slices: [...this.padSlices] },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
+      ...this.pads.map((p, pad): ToWorklet => ({ type: 'fx', pad, fx: $state.snapshot(p.fx) })),
+      { type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) },
       ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),
       { type: 'groove', grid: this.grid, strength: this.strength, swing: this.swing },
       { type: 'events', events: this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch })) },
