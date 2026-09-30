@@ -59,6 +59,12 @@ impl Pattern {
         self.reposition();
     }
 
+    pub fn set_events(&mut self, events: Vec<Event>) {
+        self.events.clear();
+        self.events.extend(events);
+        self.reposition();
+    }
+
     pub fn push(&mut self, event: Event) {
         self.events.push(event);
         self.reposition();

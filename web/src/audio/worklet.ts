@@ -73,8 +73,9 @@ class SilyProcessor extends AudioWorkletProcessor {
         w.engine_set_groove(msg.grid, msg.strength, msg.swing)
         break
       case 'events':
-        w.engine_clear_events()
-        for (const e of msg.events) w.engine_add_event(e.beat, e.pad, e.velocity, e.nudge, e.pitch)
+        w.engine_queue_clear()
+        for (const e of msg.events) w.engine_queue_add(e.beat, e.pad, e.velocity, e.nudge, e.pitch)
+        w.engine_queue_replace()
         break
       case 'queueEvents':
         w.engine_queue_clear()

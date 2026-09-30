@@ -69,6 +69,7 @@ pub struct Engine {
     played: f64,
     metronome: bool,
     click_age: Option<usize>,
+    click_accent: bool,
     out: [Vec<f32>; 2],
     pending: Vec<(usize, Event)>,
     fade_in: usize,
@@ -99,6 +100,7 @@ impl Engine {
             played: 0.0,
             metronome: false,
             click_age: None,
+            click_accent: false,
             out: [vec![0.0; max_block], vec![0.0; max_block]],
             pending: Vec::with_capacity(MAX_EVENTS),
             fade_in: ((sample_rate * 0.002) as usize).max(1),
@@ -111,6 +113,7 @@ impl Engine {
         self.audition = None;
         self.sample = [left, right];
         self.markers.clear();
+        self.pads.iter_mut().for_each(|p| p.stretched.clear());
         self.pad_slices = std::array::from_fn(|i| i);
     }
 
@@ -213,6 +216,7 @@ impl Engine {
     }
 
     pub fn clear_events(&mut self) {
+        self.queued = None;
         self.pattern.clear();
     }
 
@@ -230,11 +234,14 @@ impl Engine {
         }
     }
 
-    fn replace_events(&mut self, events: Vec<Event>) {
-        self.pattern.clear();
-        for e in events.into_iter().take(MAX_EVENTS) {
-            self.pattern.push(e);
-        }
+    pub fn set_events(&mut self, events: Vec<Event>) {
+        self.queued = None;
+        self.replace_events(events);
+    }
+
+    fn replace_events(&mut self, mut events: Vec<Event>) {
+        events.truncate(MAX_EVENTS);
+        self.pattern.set_events(events);
     }
 
     pub fn beat(&self) -> f64 {
@@ -259,6 +266,7 @@ impl Engine {
         }
         self.pending.clear();
         let mut clicks = [usize::MAX; 8];
+        let mut accents = [false; 8];
         if self.playing {
             let beats_per_frame = self.beats_per_second() / self.sample_rate;
             let span = frames as f64 * beats_per_frame;
@@ -292,6 +300,7 @@ impl Engine {
                 let mut n = 0;
                 while k < self.beat + audible_span && n < clicks.len() {
                     clicks[n] = frame_offset(k - self.beat, beats_per_frame, frames);
+                    accents[n] = k.rem_euclid(self.pattern.length_beats()) < 1e-9;
                     k += 1.0;
                     n += 1;
                 }
@@ -318,8 +327,9 @@ impl Engine {
                 self.start_pad(e.pad as usize, e.velocity, e.pitch);
                 next_event += 1;
             } else {
-                if let Some(c) = clicks.iter_mut().find(|c| **c == at) {
-                    *c = usize::MAX;
+                if let Some(n) = clicks.iter().position(|c| *c == at) {
+                    clicks[n] = usize::MAX;
+                    self.click_accent = accents[n];
                 }
                 self.click_age = Some(0);
             }
@@ -437,8 +447,7 @@ impl Engine {
         }
         if let Some(age) = self.click_age.as_mut() {
             let length = (self.sample_rate * 0.03) as usize;
-            let accent = self.block_beat < 0.5;
-            let freq = if accent { 1500.0 } else { 1000.0 };
+            let freq = if self.click_accent { 1500.0 } else { 1000.0 };
             for i in from..to {
                 if *age >= length {
                     self.click_age = None;
@@ -975,5 +984,67 @@ mod tests {
         e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[30] - 1.0).abs() < 0.2, "{}", out[30]);
+    }
+
+    #[test]
+    fn loading_a_sample_forgets_stretched_buffers() {
+        let src = ramp(1000);
+        let mut e = engine_with(vec![0.9; 1000]);
+        e.set_pad_stretched(0, 0.0, Some([vec![0.9; 800], vec![0.9; 800]]));
+        e.load_sample(src.clone(), src.clone());
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 50);
+        assert!((out[20] - src[20]).abs() < 1e-4, "{}", out[20]);
+    }
+
+    #[test]
+    fn clearing_events_drops_a_queued_pattern() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.set_playing(true);
+        render(&mut e, 200);
+        e.queue_events(vec![at(0.5, 0)]);
+        e.clear_events();
+        e.add_event(at(0.25, 0));
+        let out = render(&mut e, 1400);
+        assert_eq!(first_sound(&out[1250..1350]), None);
+    }
+
+    #[test]
+    fn the_downbeat_click_keeps_one_pitch_across_blocks() {
+        let mut e = engine_with(vec![0.0; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.set_metronome(true);
+        e.set_playing(true);
+        render(&mut e, 995);
+        let mut out = Vec::new();
+        let mut time = 0.0;
+        for _ in 0..3 {
+            e.process(10, time);
+            out.extend_from_slice(&e.output(0)[..10]);
+            time += 0.01;
+        }
+        let first = out.iter().position(|s| s.abs() > 1e-6).unwrap();
+        let expected: Vec<f32> = (0..15).map(|age| {
+            let t = age as f64 / SR;
+            ((2.0 * std::f64::consts::PI * 1500.0 * t).cos() * (-t * 150.0).exp() * 0.3) as f32
+        }).collect();
+        for (i, want) in expected.iter().enumerate() {
+            assert!((out[first + i] - want).abs() < 1e-4, "sample {i}: {} vs {}", out[first + i], want);
+        }
+    }
+
+    #[test]
+    fn replacing_many_events_keeps_them_in_time_order() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(4.0);
+        e.set_events((0..8).rev().map(|i| at(i as f64 * 0.5, 0)).collect());
+        e.set_playing(true);
+        let out = render(&mut e, 4000);
+        let onsets: Vec<usize> = (0..8).filter_map(|i| first_sound(&out[i * 500..i * 500 + 50]).map(|o| o + i * 500)).collect();
+        assert_eq!(onsets, (0..8).map(|i| i * 500).collect::<Vec<_>>());
     }
 }

@@ -303,3 +303,9 @@ pub extern "C" fn result_scores() -> *const f32 {
 pub extern "C" fn engine_set_choke_group(pad: u32, group: i32) {
     engine().set_choke_group(pad as usize, (group > 0).then_some(group as u8));
 }
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn engine_queue_replace() {
+    engine().set_events(unsafe { std::mem::take(&mut QUEUE) });
+}
