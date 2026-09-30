@@ -10,6 +10,7 @@ static mut ENGINE: Option<Engine> = None;
 static mut RESULT_FRAMES: Vec<u32> = Vec::new();
 static mut RESULT_AUDIO: [Vec<f32>; 2] = [Vec::new(), Vec::new()];
 static mut MODEL: Option<Model> = None;
+static mut QUEUE: Vec<Event> = Vec::new();
 static mut RESULT_FEATURES: Vec<f32> = Vec::new();
 static mut RESULT_CONFIDENCE: f32 = 0.0;
 
@@ -261,4 +262,22 @@ pub extern "C" fn result_features() -> *const f32 {
 #[allow(static_mut_refs)]
 pub extern "C" fn result_features_len() -> u32 {
     unsafe { RESULT_FEATURES.len() as u32 }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn engine_queue_clear() {
+    unsafe { QUEUE.clear() }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn engine_queue_add(beat: f64, pad: u32, velocity: f32, nudge: f64, pitch: f64) {
+    unsafe { QUEUE.push(Event { beat, pad: pad as u8, velocity, nudge, pitch }) }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn engine_queue_commit() {
+    engine().queue_events(unsafe { std::mem::take(&mut QUEUE) });
 }
