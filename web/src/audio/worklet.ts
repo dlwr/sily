@@ -40,6 +40,14 @@ class SilyProcessor extends AudioWorkletProcessor {
         else w.engine_set_pad_fx(msg.pad, ...args)
         break
       }
+      case 'padSample':
+        if (msg.left && msg.right) {
+          const frames = msg.left.length
+          withFloats(w, [msg.left, msg.right], ([l, r]) => w.engine_set_pad_sample(msg.pad, l, r, frames))
+        } else {
+          w.engine_set_pad_sample(msg.pad, 0, 0, 0)
+        }
+        break
       case 'padSlices':
         msg.slices.forEach((slice, pad) => w.engine_set_pad_slice(pad, slice))
         break
