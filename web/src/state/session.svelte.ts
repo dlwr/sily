@@ -1,6 +1,7 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
 import type { ToWorklet } from '../audio/messages'
 import { arrangePads, remapEvents, type Category } from '../classify/categories'
+import { ClapClient } from '../classify/clapClient'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
@@ -15,6 +16,8 @@ const PADS = 16
 const CORRECTIONS_KEY = 'sily.corrections'
 const CLASSIFY_DELAY_MS = 150
 const CANDIDATES = 4
+const CLAP_MAX_SECONDS = 10
+const UPPER_KINDS: Category[] = ['keys', 'vocal', 'melody', 'fx']
 const identity = () => Array.from({ length: PADS }, (_, i) => i)
 const EXPORT_TAIL_SECONDS = 2
 const SILENCE = 1e-4
@@ -53,7 +56,10 @@ export class Session {
   looseness = $state(0.5)
   candidates = $state<PadEvent[][]>([])
   previewing = $state<number | null>(null)
+  refining = $state(false)
   private beforeGenerate: PadEvent[] | null = null
+  private clap = new ClapClient()
+  private refineGeneration = 0
 
   private lastTick = { frame: 0, time: 0 }
   private capture: Capture | null = null
@@ -324,6 +330,35 @@ export class Session {
       labels[start] = { category: result.category, confidence: result.confidence, manual: false }
     }
     this.labels = labels
+    this.refineUpper()
+  }
+
+  private async refineUpper() {
+    const sample = this.sample
+    if (!sample) return
+    const generation = ++this.refineGeneration
+    const targets = Object.entries(this.labels)
+      .filter(([, l]) => !l.manual && l.category === 'upper')
+      .map(([start]) => Number(start))
+    if (targets.length === 0) return
+    this.refining = true
+    try {
+      for (const start of targets) {
+        const index = this.markers.indexOf(start)
+        const end = Math.min(
+          this.markers[index + 1] ?? sample.left.length,
+          start + CLAP_MAX_SECONDS * this.sampleRate,
+        )
+        const result = await this.clap.classify(sample.mono.slice(start, end), this.sampleRate, UPPER_KINDS)
+        if (generation !== this.refineGeneration) return
+        const current = this.labels[start]
+        if (current && !current.manual) this.labels[start] = { ...result, manual: false }
+      }
+    } catch {
+      this.message = 'うわもの判定のモデルを読み込めなかった'
+    } finally {
+      if (generation === this.refineGeneration) this.refining = false
+    }
   }
 
   setSourceSpeed(patch: Partial<SourceSpeed>) {
