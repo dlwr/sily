@@ -46,6 +46,7 @@ export type SilyExports = {
   result_features(): number
   result_features_len(): number
   result_scores(): number
+  analyze_chroma(mono: number, frames: number, sampleRate: number): number
 }
 
 export const instantiate = (module: WebAssembly.Module, now: () => number): SilyExports => {

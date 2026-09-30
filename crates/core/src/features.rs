@@ -99,6 +99,7 @@ const SEGMENT_FFT: usize = 1024;
 const SEGMENT_HOP: usize = 256;
 const ALIGN_BLOCK: usize = 128;
 const PRE_ROLL: usize = 64;
+const PEAK_SHARE: f32 = 0.9;
 
 fn aligned_start(mono: &[f32]) -> isize {
     let peak = mono.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -248,15 +249,23 @@ fn best_lag(mono: &[f32], sample_rate: u32) -> Option<(usize, f32)> {
     }
     let min_lag = (sample_rate / 2_000).max(1) as usize;
     let max_lag = ((sample_rate / 40) as usize).min(len / 2);
-    (min_lag..max_lag)
+    let curve: Vec<(usize, f32)> = (min_lag..max_lag)
         .map(|lag| {
             let (a, b) = (&seg[..len - lag], &seg[lag..]);
             let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
             let norm = (a.iter().map(|x| x * x).sum::<f32>() * b.iter().map(|y| y * y).sum::<f32>()).sqrt();
             (lag, dot / (norm + EPS))
         })
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .filter(|(_, r)| *r > 0.0)
+        .collect();
+    let after_dip = curve.iter().position(|(_, r)| *r < 0.0)?;
+    let peak = curve[after_dip..].iter().map(|(_, r)| *r).fold(f32::MIN, f32::max);
+    if peak <= 0.0 {
+        return None;
+    }
+    curve[after_dip..].windows(3).find_map(|w| {
+        let (lag, r) = w[1];
+        (r >= peak * PEAK_SHARE && r >= w[0].1 && r >= w[2].1).then_some((lag, r))
+    })
 }
 
 fn mfcc(power: &[f32], sample_rate: u32) -> [f32; MFCC_BANDS] {
@@ -428,5 +437,17 @@ mod tests {
     #[test]
     fn segments_of_silence_are_finite() {
         assert!(extract(&vec![0.0; 4410], SR).segments.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn estimates_the_pitch_of_a_low_note() {
+        let hz = extract(&sine(55.0, 0.5), SR).pitch_hz;
+        assert!((hz - 55.0).abs() < 1.5, "{hz}");
+    }
+
+    #[test]
+    fn estimates_the_pitch_of_a_mid_note() {
+        let hz = extract(&sine(220.0, 0.5), SR).pitch_hz;
+        assert!((hz - 220.0).abs() < 3.0, "{hz}");
     }
 }

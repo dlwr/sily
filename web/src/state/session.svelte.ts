@@ -4,7 +4,7 @@ import { arrangePads, remapEvents, type Category } from '../classify/categories'
 import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
 import { resample } from '../classify/clap'
-import { DEFAULT_FX, type FxSettings } from '../fx/fx'
+import { DEFAULT_FX, isFlat, type FxSettings } from '../fx/fx'
 import { newId } from '../storage/db'
 import { pack, unpack } from '../storage/bundle'
 import { deleteSample, importSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
@@ -18,6 +18,7 @@ import {
 } from '../storage/projects'
 import { untrack } from 'svelte'
 import { generate, type PadInfo, type Style } from '../generate/generate'
+import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
@@ -34,6 +35,8 @@ export type PadSettings = {
   chokeAuto: boolean
   fx: FxSettings
   sample: { id: string; name: string; category: Category } | null
+  pitchAuto: boolean
+  fxAuto: boolean
 }
 export type Label = {
   category: Category
@@ -63,10 +66,14 @@ const freshPad = (): PadSettings => ({
   chokeAuto: true,
   fx: { ...DEFAULT_FX },
   sample: null,
+  pitchAuto: true,
+  fxAuto: true,
 })
 const CORRECTIONS_KEY = 'sily.corrections'
 const CLASSIFY_DELAY_MS = 150
 const MAX_CLASSIFIED = 128
+const PITCHEDNESS = 11
+const PITCH_HZ = 108
 const HAT_CHOKE = 1
 const CANDIDATES = 4
 const CLAP_MAX_SECONDS = 10
@@ -80,7 +87,7 @@ export class Session {
   sample = $state.raw<Sample | null>(null)
   markers = $state<number[]>([])
   pads = $state<PadSettings[]>(
-    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null })),
+    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null, pitchAuto: true, fxAuto: true })),
   )
   selectedPad = $state(0)
   events = $state<PadEvent[]>([])
@@ -113,6 +120,9 @@ export class Session {
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
   library = $state<SampleMeta[]>([])
+  key = $state<Key>({ root: 0, minor: true })
+  keyAuto = $state(true)
+  autoShape = $state(true)
   projectId = $state<string | null>(null)
   projectName = $state('無題')
   projects = $state<ProjectDoc[]>([])
@@ -200,6 +210,9 @@ export class Session {
       sourceSpeed: this.sourceSpeed,
       sourceBpm: this.sourceBpm,
       masterFx: this.masterFx,
+      key: this.key,
+      keyAuto: this.keyAuto,
+      autoShape: this.autoShape,
     })
   }
 
@@ -283,7 +296,12 @@ export class Session {
     this.markers = st.markers ?? []
     this.labels = st.labels ?? {}
     this.padSlices = st.padSlices ?? identity()
-    this.pads = (st.pads ?? []).map((p) => ({ ...freshPad(), ...p }))
+    this.pads = (st.pads ?? []).map((p: Partial<PadSettings>) => ({
+      ...freshPad(),
+      ...p,
+      pitchAuto: p.pitchAuto ?? p.pitch === 0,
+      fxAuto: p.fxAuto ?? isFlat({ ...DEFAULT_FX, ...p.fx }),
+    }))
     while (this.pads.length < PADS) this.pads.push(freshPad())
     this.events = st.events ?? []
     this.bpm = st.bpm ?? this.bpm
@@ -298,6 +316,9 @@ export class Session {
     this.sourceSpeed = st.sourceSpeed ?? { mode: 'tape', rate: 1 }
     this.sourceBpm = st.sourceBpm ?? null
     this.masterFx = { ...DEFAULT_FX, ...st.masterFx }
+    this.key = st.key ?? this.key
+    this.keyAuto = st.keyAuto ?? true
+    this.autoShape = st.autoShape ?? true
     this.history = new History<Doc>()
     this.syncOwn()
     this.sendMarkers()
@@ -390,6 +411,7 @@ export class Session {
     if (!this.sily) return
     this.sample = { name, left, right, mono: mixdown(left, right) }
     this.sourceId = null
+    if (this.keyAuto) this.key = estimateKey(this.sily.chroma(this.sample.mono))
     this.sourceSpeed = { mode: 'tape', rate: 1 }
     this.sourceBpm = null
     this.loadEngineSample(left, right, null)
@@ -517,6 +539,7 @@ export class Session {
     this.checkpoint()
     this.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
     this.autoChoke()
+    this.shapePads()
     const features = this.features.get(start)
     if (features) {
       const corrections = [...readCorrections(), { features, label: category }]
@@ -665,6 +688,7 @@ export class Session {
     this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
     this.padSlices = after
     this.autoChoke()
+    this.shapePads()
     this.sily?.send({ type: 'padSlices', slices: [...after] })
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
@@ -686,6 +710,54 @@ export class Session {
     if (next) this.restore(next)
   }
 
+  setKey(key: Key) {
+    this.key = key
+    this.keyAuto = false
+    this.shapePads()
+  }
+
+  setAutoShape(on: boolean) {
+    this.autoShape = on
+    this.shapePads()
+  }
+
+  resetPadShape(pad: number) {
+    this.checkpoint()
+    this.pads[pad].pitchAuto = true
+    this.pads[pad].fxAuto = true
+    this.shapePads()
+  }
+
+  private shapePads() {
+    let pitchChanged = false
+    this.pads.forEach((p, pad) => {
+      if (p.sample) return
+      const label = this.labelOf(pad)
+      const start = this.sliceStart(this.padSlices[pad])
+      const features = start === null ? undefined : this.features.get(start)
+      let changed = false
+      if (p.pitchAuto) {
+        const pitch =
+          this.autoShape && label && features
+            ? autoPitch(label.category, features[PITCH_HZ], features[PITCHEDNESS], this.key)
+            : 0
+        if (pitch !== p.pitch) {
+          p.pitch = pitch
+          changed = pitchChanged = true
+        }
+      }
+      if (p.fxAuto) {
+        const fx = (this.autoShape && label && autoFx(label.category)) || DEFAULT_FX
+        if (JSON.stringify(fx) !== JSON.stringify(p.fx)) {
+          p.fx = { ...fx }
+          changed = true
+        }
+      }
+      if (changed) this.sendPad(pad)
+    })
+    if (pitchChanged) this.fillStretched()
+  }
+
   private sendPad(pad: number) {
     const p = this.pads[pad]
     this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })
@@ -695,6 +767,7 @@ export class Session {
   setPadFx(pad: number, patch: Partial<FxSettings>) {
     this.checkpoint(`fx:${pad}:${Object.keys(patch).join()}`)
     this.pads[pad].fx = { ...this.pads[pad].fx, ...patch }
+    this.pads[pad].fxAuto = false
     this.sendPad(pad)
   }
 
@@ -863,6 +936,7 @@ export class Session {
       this.applyKit()
     }
     this.autoChoke()
+    this.shapePads()
     this.refineUpper()
   }
 
@@ -974,6 +1048,7 @@ export class Session {
   setPad(pad: number, patch: Partial<PadSettings>) {
     this.checkpoint(`pad:${pad}:${Object.keys(patch).join()}`)
     Object.assign(this.pads[pad], patch)
+    if ('pitch' in patch && !('pitchAuto' in patch)) this.pads[pad].pitchAuto = false
     this.sendPad(pad)
     if ('chokeAuto' in patch) this.autoChoke()
     if ('stretch' in patch || 'reverse' in patch) this.invalidateStretched([pad])

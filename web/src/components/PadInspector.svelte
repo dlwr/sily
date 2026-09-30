@@ -77,6 +77,13 @@
     </select>
     <span class="num muted">{pad.choke > 0 ? pad.choke : ''}</span>
   </label>
+  {#if !pad.sample && (!pad.pitchAuto || !pad.fxAuto)}
+    <button onclick={() => session.resetPadShape(session.selectedPad)} title="手で変えたピッチと音作りを、自動で整えた値に戻す">
+      ピッチと音作りを自動に戻す
+    </button>
+  {:else if !pad.sample && session.autoShape}
+    <p class="muted hint">ピッチと音作りは自動で整えている（キー {session.key.minor ? '短調' : '長調'}）</p>
+  {/if}
   <PadFx {session} />
   <PadLibrary {session} />
   <div class="modes" role="radiogroup" aria-label="ピッチの扱い">
