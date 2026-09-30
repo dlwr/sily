@@ -90,6 +90,17 @@ export class Sily {
     })
   }
 
+  stretch(left: Float32Array, right: Float32Array, lengthRatio: number): { left: Float32Array; right: Float32Array } {
+    const w = this.analysis
+    return withFloats(w, [left, right], ([l, r]) => {
+      const frames = w.stretch(l, r, left.length, this.sampleRate, lengthRatio)
+      return {
+        left: new Float32Array(w.memory.buffer, w.result_audio(0), frames).slice(),
+        right: new Float32Array(w.memory.buffer, w.result_audio(1), frames).slice(),
+      }
+    })
+  }
+
   async inputs(): Promise<MediaDeviceInfo[]> {
     const devices = await navigator.mediaDevices.enumerateDevices()
     return devices.filter((d) => d.kind === 'audioinput')

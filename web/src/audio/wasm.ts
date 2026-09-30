@@ -5,9 +5,11 @@ export type SilyExports = {
   engine_init(sampleRate: number, maxBlock: number): void
   engine_load(left: number, right: number, frames: number): void
   engine_set_markers(ptr: number, len: number): void
-  engine_set_pad(pad: number, pitch: number, gain: number): void
-  engine_set_pad_stretched(pad: number, left: number, right: number, frames: number): void
-  engine_trigger(pad: number, velocity: number): void
+  engine_set_pad(pad: number, pitch: number, gain: number, reverse: number): void
+  engine_set_pad_stretched(pad: number, pitch: number, left: number, right: number, frames: number): void
+  engine_clear_pad_stretched(pad: number): void
+  engine_set_source_rate(rate: number): void
+  engine_trigger(pad: number, velocity: number, pitch: number): void
   engine_trigger_note(slice: number, semitones: number, velocity: number): void
   engine_audition(fromFrame: number): void
   engine_audition_frame(): number
@@ -17,7 +19,7 @@ export type SilyExports = {
   engine_set_pattern_length(beats: number): void
   engine_set_groove(grid: number, strength: number, swing: number): void
   engine_clear_events(): void
-  engine_add_event(beat: number, pad: number, velocity: number, nudge: number): void
+  engine_add_event(beat: number, pad: number, velocity: number, nudge: number, pitch: number): void
   engine_beat(): number
   engine_beat_at_time(time: number): number
   engine_process(frames: number, time: number): void
@@ -26,6 +28,7 @@ export type SilyExports = {
   result_frames(): number
   analyze_bpm(mono: number, frames: number, sampleRate: number): number
   pitch_shift(left: number, right: number, frames: number, sampleRate: number, semitones: number): number
+  stretch(left: number, right: number, frames: number, sampleRate: number, ratio: number): number
   result_audio(channel: number): number
 }
 
