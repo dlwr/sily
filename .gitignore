@@ -5,3 +5,4 @@ node_modules/
 /web/src/wasm/*.wasm
 .wrangler/
 .DS_Store
+.env

@@ -42,7 +42,7 @@ impl Features {
 const WINDOW: usize = 2048;
 const HOP: usize = 512;
 const ANALYSIS_SECONDS: f32 = 0.05;
-const ENVELOPE_BLOCK: usize = 64;
+const ENVELOPE_BLOCK: usize = 512;
 const MEL_BANDS: usize = 26;
 const EPS: f32 = 1e-10;
 
@@ -113,10 +113,7 @@ fn mean_power_spectrum(mono: &[f32], sample_rate: u32) -> Vec<f32> {
 }
 
 fn envelope_times(mono: &[f32], sr: f32) -> (f32, f32) {
-    let env: Vec<f32> = mono
-        .chunks(ENVELOPE_BLOCK)
-        .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
-        .collect();
+    let env: Vec<f32> = mono.chunks(ENVELOPE_BLOCK).map(|c| c.iter().fold(0.0f32, |m, x| m.max(x.abs()))).collect();
     let Some((peak_at, &peak)) = env.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)) else {
         return (0.0, 0.0);
     };
@@ -124,8 +121,8 @@ fn envelope_times(mono: &[f32], sr: f32) -> (f32, f32) {
         return (0.0, 0.0);
     }
     let block_seconds = ENVELOPE_BLOCK as f32 / sr;
-    let decay_blocks = env[peak_at..].iter().position(|&e| e < peak * 0.1).unwrap_or(env.len() - peak_at);
-    ((peak_at as f32 + 1.0) * block_seconds, decay_blocks as f32 * block_seconds)
+    let last_loud = env.iter().rposition(|&e| e >= peak * 0.1).unwrap_or(peak_at);
+    ((peak_at as f32 + 1.0) * block_seconds, (last_loud - peak_at + 1) as f32 * block_seconds)
 }
 
 fn pitchedness(mono: &[f32], sample_rate: u32) -> f32 {
@@ -279,5 +276,22 @@ mod tests {
     fn attack_measures_the_time_to_peak() {
         let ramp: Vec<f32> = (0..4410).map(|i| i as f32 / 4410.0).chain(std::iter::repeat(0.0).take(4410)).collect();
         assert!((extract(&ramp, SR).attack - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn low_notes_do_not_fake_a_short_decay() {
+        let bass = decaying(sine(55.0, 1.5), 1.5);
+        assert!(extract(&bass, SR).decay > 1.0, "{}", extract(&bass, SR).decay);
+    }
+
+    #[test]
+    fn beating_chords_do_not_fake_a_short_decay() {
+        let chord: Vec<f32> = (0..(SR as f32 * 1.5) as usize)
+            .map(|i| {
+                let t = i as f32 / SR as f32;
+                [261.6f32, 329.6, 392.0, 523.2].iter().map(|f| (2.0 * std::f32::consts::PI * f * t).sin()).sum::<f32>() * 0.15 * (-t * 2.0).exp()
+            })
+            .collect();
+        assert!(extract(&chord, SR).decay > 0.8, "{}", extract(&chord, SR).decay);
     }
 }

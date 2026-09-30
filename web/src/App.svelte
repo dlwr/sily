@@ -95,6 +95,7 @@
             {(session.sample.left.length / session.sampleRate).toFixed(2)} 秒 / {Math.max(1, session.markers.length)} スライス
           </span>
         {/if}
+        {#if session.refining}<span class="muted">うわものを判定中（初回はモデルを読み込むので少し待つ）</span>{/if}
         {#if session.message}<span class="error">{session.message}</span>{/if}
       </div>
       <Waveform {session} />
