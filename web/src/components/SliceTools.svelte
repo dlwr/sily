@@ -82,7 +82,7 @@
     <button onclick={() => session.setMarkers([])} disabled={session.markers.length === 0}>マーカー消去</button>
   </div>
   <p class="hint muted">
-    クリックで試聴位置 / ダブルクリックでそのスライスを選択中のパッドへ / Shift+クリックでマーカー追加 / 右クリックで削除 / マーカーはドラッグで移動
+    ピンチか Ctrl+ホイールで拡大、横スクロールで移動 / クリックで試聴位置 / ダブルクリックでそのスライスを選択中のパッドへ / Shift+クリックでマーカー追加 / 右クリックで削除 / マーカーはドラッグで移動
   </p>
 </div>
 
