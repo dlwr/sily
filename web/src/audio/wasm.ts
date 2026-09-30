@@ -36,6 +36,7 @@ export type SilyExports = {
   engine_queue_clear(): void
   engine_queue_add(beat: number, pad: number, velocity: number, nudge: number, pitch: number): void
   engine_queue_commit(): void
+  engine_queue_replace(): void
   classifier_load(json: number, len: number): number
   classify_slice(mono: number, frames: number, sampleRate: number): number
   result_confidence(): number
