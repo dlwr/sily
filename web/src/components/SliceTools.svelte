@@ -79,7 +79,7 @@
     {#each [4, 8, 16] as n}
       <button onclick={() => session.gridSlice(n)} disabled={!session.sample}>{n}</button>
     {/each}
-    <button onclick={() => session.setMarkers([])} disabled={session.markers.length === 0}>マーカー消去</button>
+    <button onclick={() => session.clearMarkers()} disabled={session.markers.length === 0}>マーカー消去</button>
   </div>
   <p class="hint muted">
     ピンチか Ctrl+ホイールで拡大、横スクロールで移動 / クリックで試聴位置 / ダブルクリックでそのスライスを選択中のパッドへ / Shift+クリックでマーカー追加 / 右クリックで削除 / マーカーはドラッグで移動
