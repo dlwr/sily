@@ -56,3 +56,13 @@ describe('shiftPitch', () => {
     expect(shiftPitch([{ ...at(1, 0, 'a'), pitch: 23 }], 'a', 5)[0].pitch).toBe(24)
   })
 })
+
+describe('editing generated notes', () => {
+  it('claims a generated note once it is nudged', () => {
+    expect(nudgeEvent([{ ...at(1, 0, 'a'), auto: true }], 'a', 0.01)[0].auto).toBe(false)
+  })
+
+  it('claims a generated note once its pitch changes', () => {
+    expect(shiftPitch([{ ...at(1, 0, 'a'), auto: true }], 'a', 1)[0].auto).toBe(false)
+  })
+})
