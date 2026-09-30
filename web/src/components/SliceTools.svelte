@@ -17,7 +17,7 @@
   })
 
   const capture = async () => {
-    await session.toggleCapture(deviceId || undefined)
+    await session.toggleCapture({ device: deviceId || undefined })
     refreshDevices()
   }
 </script>
@@ -39,8 +39,22 @@
       <option value="">既定の入力</option>
       {#each devices as d}<option value={d.deviceId}>{d.label || '入力デバイス'}</option>{/each}
     </select>
-    <button class="rec" aria-pressed={session.capturing} onclick={capture}>
-      {session.capturing ? '録音を止めて取り込む' : '録音'}
+    <button
+      class="rec"
+      aria-pressed={session.capturing === 'device'}
+      disabled={session.capturing === 'display'}
+      onclick={capture}
+    >
+      {session.capturing === 'device' ? '録音を止めて取り込む' : '録音'}
+    </button>
+    <button
+      class="rec"
+      aria-pressed={session.capturing === 'display'}
+      disabled={session.capturing === 'device'}
+      onclick={() => session.toggleCapture('display')}
+      title="タブや画面を共有して、その音を録る"
+    >
+      {session.capturing === 'display' ? '録音を止めて取り込む' : 'PCの音を録音'}
     </button>
   </div>
   <div class="group">

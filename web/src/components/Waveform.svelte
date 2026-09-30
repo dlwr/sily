@@ -128,7 +128,7 @@
     <div class="playhead" style:transform="translateX({xOfFrame(session.auditionFrame)}px)"></div>
   {/if}
   {#if !session.sample}
-    <p class="empty">音声ファイルをドロップ、または下の「録音」で PC の音を取り込む</p>
+    <p class="empty">音声ファイルをドロップ、または下の「PCの音を録音」で鳴っている音を取り込む</p>
   {/if}
 </div>
 

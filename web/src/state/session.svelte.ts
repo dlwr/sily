@@ -26,7 +26,7 @@ export class Session {
   beat = $state(0)
   auditionFrame = $state<number | null>(null)
   sensitivity = $state(0.5)
-  capturing = $state(false)
+  capturing = $state<'device' | 'display' | null>(null)
   hits = $state<number[]>(Array(PADS).fill(0))
   message = $state('')
 
@@ -80,21 +80,33 @@ export class Session {
     this.message = ''
   }
 
-  async toggleCapture(deviceId?: string) {
+  async toggleCapture(source: { device: string | undefined } | 'display') {
     if (!this.sily) return
     if (this.capture) {
-      const { left, right } = this.capture.stop()
-      this.capture = null
-      this.capturing = false
-      if (left.length > 0) this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
+      this.finishCapture()
       return
     }
     try {
-      this.capture = await this.sily.capture(deviceId)
-      this.capturing = true
+      this.capture =
+        source === 'display'
+          ? await this.sily.captureDisplay(() => this.finishCapture())
+          : await this.sily.capture(source.device)
+      this.capturing = source === 'display' ? 'display' : 'device'
+      this.message = ''
     } catch {
-      this.message = '入力デバイスを開けなかった'
+      this.message =
+        source === 'display'
+          ? '音声を取れなかった。共有ダイアログで「タブの音声」か「システム音声」を有効にしてほしい'
+          : '入力デバイスを開けなかった'
     }
+  }
+
+  private finishCapture() {
+    if (!this.capture) return
+    const { left, right } = this.capture.stop()
+    this.capture = null
+    this.capturing = null
+    if (left.length > 0) this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
   }
 
   toggleAudition(from = 0) {

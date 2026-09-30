@@ -105,6 +105,25 @@ export class Sily {
         channelCount: 2,
       },
     })
+    return this.record(stream)
+  }
+
+  async captureDisplay(onEnded: () => void): Promise<Capture> {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: 'include',
+    } as DisplayMediaStreamOptions)
+    const [audio] = stream.getAudioTracks()
+    if (!audio) {
+      stream.getTracks().forEach((t) => t.stop())
+      throw new Error('no audio track')
+    }
+    audio.addEventListener('ended', onEnded)
+    return this.record(stream)
+  }
+
+  private record(stream: MediaStream): Capture {
     const source = this.ctx.createMediaStreamSource(stream)
     const recorder = new AudioWorkletNode(this.ctx, 'sily-recorder', { numberOfOutputs: 0 })
     const chunks: { left: Float32Array; right: Float32Array }[] = []
