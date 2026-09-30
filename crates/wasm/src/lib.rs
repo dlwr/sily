@@ -44,19 +44,29 @@ pub unsafe extern "C" fn engine_set_markers(ptr: *const u32, len: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn engine_set_pad(pad: u32, pitch: f64, gain: f32) {
-    engine().set_pad(pad as usize, pitch, gain);
+pub extern "C" fn engine_set_pad(pad: u32, pitch: f64, gain: f32, reverse: u32) {
+    engine().set_pad(pad as usize, pitch, gain, reverse != 0);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn engine_set_pad_stretched(pad: u32, left: *const f32, right: *const f32, frames: u32) {
+pub unsafe extern "C" fn engine_set_pad_stretched(pad: u32, pitch: f64, left: *const f32, right: *const f32, frames: u32) {
     let buffer = (frames > 0).then(|| [floats(left, frames).to_vec(), floats(right, frames).to_vec()]);
-    engine().set_pad_stretched(pad as usize, buffer);
+    engine().set_pad_stretched(pad as usize, pitch, buffer);
 }
 
 #[no_mangle]
-pub extern "C" fn engine_trigger(pad: u32, velocity: f32) {
-    engine().trigger(pad as usize, velocity);
+pub extern "C" fn engine_clear_pad_stretched(pad: u32) {
+    engine().clear_pad_stretched(pad as usize);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_set_source_rate(rate: f64) {
+    engine().set_source_rate(rate);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_trigger(pad: u32, velocity: f32, pitch: f64) {
+    engine().trigger(pad as usize, velocity, pitch);
 }
 
 #[no_mangle]
@@ -105,8 +115,8 @@ pub extern "C" fn engine_clear_events() {
 }
 
 #[no_mangle]
-pub extern "C" fn engine_add_event(beat: f64, pad: u32, velocity: f32, nudge: f64) {
-    engine().add_event(Event { beat, pad: pad as u8, velocity, nudge });
+pub extern "C" fn engine_add_event(beat: f64, pad: u32, velocity: f32, nudge: f64, pitch: f64) {
+    engine().add_event(Event { beat, pad: pad as u8, velocity, nudge, pitch });
 }
 
 #[no_mangle]
@@ -173,4 +183,14 @@ pub unsafe extern "C" fn pitch_shift(
 #[allow(static_mut_refs)]
 pub extern "C" fn result_audio(channel: u32) -> *const f32 {
     unsafe { RESULT_AUDIO[channel as usize].as_ptr() }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn stretch(left: *const f32, right: *const f32, frames: u32, sample_rate: u32, ratio: f64) -> u32 {
+    let params = timestretch::StretchParams::new(ratio).with_sample_rate(sample_rate).with_channels(1);
+    for (ch, input) in [left, right].into_iter().enumerate() {
+        RESULT_AUDIO[ch] = timestretch::stretch(floats(input, frames), &params).unwrap_or_default();
+    }
+    RESULT_AUDIO[0].len().min(RESULT_AUDIO[1].len()) as u32
 }
