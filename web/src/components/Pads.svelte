@@ -14,7 +14,8 @@
       <button
         class="pad"
         class:selected={session.selectedPad === pad}
-        class:empty={!session.sliceRange(pad)}
+        class:empty={!session.hasSound(pad)}
+        class:own={session.pads[pad].sample !== null}
         onpointerdown={(e) => session.padDown(pad, e.timeStamp)}
       >
         {#key session.hits[pad]}<span class="flash" class:on={session.hits[pad] > 0}></span>{/key}
@@ -57,6 +58,10 @@
     justify-content: space-between;
     align-items: flex-start;
     user-select: none;
+  }
+
+  .pad.own {
+    border-style: dashed;
   }
 
   .pad.selected {

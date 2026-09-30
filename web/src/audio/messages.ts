@@ -5,6 +5,7 @@ export type ToWorklet =
   | { type: 'load'; left: Float32Array; right: Float32Array }
   | { type: 'markers'; frames: number[] }
   | { type: 'padSlices'; slices: number[] }
+  | { type: 'padSample'; pad: number; left: Float32Array | null; right: Float32Array | null }
   | { type: 'pad'; pad: number; pitch: number; gain: number; reverse: boolean; choke: number }
   | { type: 'stretched'; pad: number; pitch: number; left: Float32Array; right: Float32Array }
   | { type: 'clearStretched'; pad: number }

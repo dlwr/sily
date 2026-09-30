@@ -3,7 +3,9 @@ import type { ToWorklet } from '../audio/messages'
 import { arrangePads, remapEvents, type Category } from '../classify/categories'
 import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
+import { resample } from '../classify/clap'
 import { DEFAULT_FX, type FxSettings } from '../fx/fx'
+import { deleteSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
@@ -20,6 +22,7 @@ export type PadSettings = {
   choke: number
   chokeAuto: boolean
   fx: FxSettings
+  sample: { id: string; name: string; category: Category } | null
 }
 export type Label = {
   category: Category
@@ -54,7 +57,7 @@ export class Session {
   sample = $state.raw<Sample | null>(null)
   markers = $state<number[]>([])
   pads = $state<PadSettings[]>(
-    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX } })),
+    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null })),
   )
   selectedPad = $state(0)
   events = $state<PadEvent[]>([])
@@ -86,6 +89,7 @@ export class Session {
   refining = $state(false)
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
+  library = $state<SampleMeta[]>([])
   private beforeGenerate: PadEvent[] | null = null
   private clap = new ClapClient()
   private refineGeneration = 0
@@ -104,6 +108,7 @@ export class Session {
   private stretchVersion = 0
   private requested = new Set<string>()
   private inflight = new Set<Promise<unknown>>()
+  private own = new Map<number, { left: Float32Array; right: Float32Array }>()
   private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
   get lengthBeats() {
@@ -130,6 +135,7 @@ export class Session {
     }
     sily.onFailure = () => (this.message = 'オーディオ処理が停止した。ページを再読み込みしてほしい')
     this.sily = sily
+    this.refreshLibrary()
     this.syncTransport()
     this.syncGroove()
   }
@@ -158,12 +164,15 @@ export class Session {
     this.labels = {}
     this.features.clear()
     this.padSlices = identity()
-    this.pads.forEach((p) => (p.stretch = false))
+    this.pads.forEach((p) => {
+      if (!p.sample) p.stretch = false
+    })
     this.stretched.clear()
     this.requested.clear()
     this.stretchVersion++
     this.sourceToken++
-    this.events = []
+    this.events = this.events.filter((e) => this.pads[e.pad]?.sample)
+    this.fillStretched()
     this.syncEvents()
     this.message = ''
     this.classifySlices()
@@ -260,6 +269,8 @@ export class Session {
   }
 
   labelOf(pad: number): Label | null {
+    const own = this.pads[pad]?.sample
+    if (own) return { category: own.category, confidence: 1, manual: true, scores: { [own.category]: 1 } }
     const start = this.sliceStart(this.padSlices[pad])
     return start === null ? null : (this.labels[start] ?? null)
   }
@@ -284,10 +295,16 @@ export class Session {
 
   arrangePads() {
     this.checkpoint()
-    const after = arrangePads(this.padSlices, (slice) => {
-      const start = this.sliceStart(slice)
-      return start === null ? null : (this.labels[start]?.category ?? null)
-    })
+    const free = this.freePads()
+    const arranged = arrangePads(
+      free.map((pad) => this.padSlices[pad]),
+      (slice) => {
+        const start = this.sliceStart(slice)
+        return start === null ? null : (this.labels[start]?.category ?? null)
+      },
+    )
+    const after = [...this.padSlices]
+    free.forEach((pad, i) => (after[pad] = arranged[i]))
     this.events = remapEvents(this.events, this.padSlices, after)
     this.applyPadSlices(after)
   }
@@ -303,13 +320,97 @@ export class Session {
       const start = this.sliceStart(slice)
       return { slice, scores: (start !== null && this.labels[start]?.scores) || {} }
     })
-    const after = buildKit(candidates)
+    const kit = buildKit(candidates)
+    const after = [...this.padSlices]
+    const free = this.freePads()
+    const taken = new Set(this.padSlices.filter((_, pad) => !free.includes(pad)))
+    const picks = kit.filter((slice) => !taken.has(slice))
+    free.forEach((pad, i) => (after[pad] = picks[i]))
     this.events = dropUnplacedEvents(this.events, this.padSlices, after)
     this.applyPadSlices(after)
   }
 
+  private freePads(): number[] {
+    return this.pads.flatMap((p, pad) => (p.sample ? [] : [pad]))
+  }
+
+  hasSound(pad: number): boolean {
+    return this.pads[pad]?.sample !== null || this.sliceRange(pad) !== null
+  }
+
+  async refreshLibrary() {
+    try {
+      this.library = await listSamples()
+    } catch {
+      this.library = []
+    }
+  }
+
+  async savePadToLibrary(pad: number) {
+    const audio = this.padAudio(pad)
+    if (!audio) return
+    const p = this.pads[pad]
+    const category = this.labelOf(pad)?.category ?? 'perc'
+    const name = p.sample?.name ?? `${this.sample?.name ?? 'sample'} ${pad + 1}`
+    try {
+      await navigator.storage?.persist?.()
+      await saveSample({
+        name,
+        category,
+        sampleRate: this.sampleRate,
+        left: audio.left.slice(),
+        right: audio.right.slice(),
+        settings: $state.snapshot({ pitch: p.pitch, gain: p.gain, reverse: p.reverse, stretch: p.stretch, fx: p.fx }),
+      })
+      this.message = `「${name}」をライブラリに保存した`
+    } catch {
+      this.message = 'ライブラリに保存できなかった'
+    }
+    await this.refreshLibrary()
+  }
+
+  async loadLibrarySample(id: string, pad: number) {
+    const loaded = await loadSample(id)
+    if (!loaded || !this.sily) return
+    this.checkpoint()
+    const left = resample(loaded.left, loaded.meta.sampleRate, this.sampleRate)
+    const right = resample(loaded.right, loaded.meta.sampleRate, this.sampleRate)
+    const settings = loaded.meta.settings as Partial<PadSettings>
+    const category = loaded.meta.category as Category
+    Object.assign(this.pads[pad], settings, { sample: { id, name: loaded.meta.name, category } })
+    this.own.set(pad, { left, right })
+    this.sily.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
+    this.sendPad(pad)
+    this.autoChoke()
+    this.invalidateStretched([pad])
+  }
+
+  clearPadSample(pad: number) {
+    if (!this.pads[pad].sample) return
+    this.checkpoint()
+    this.pads[pad].sample = null
+    this.own.delete(pad)
+    this.sily?.send({ type: 'padSample', pad, left: null, right: null })
+    this.autoChoke()
+    this.invalidateStretched([pad])
+  }
+
+  async deleteLibrarySample(id: string) {
+    await deleteSample(id)
+    await this.refreshLibrary()
+  }
+
+  private padAudio(pad: number): { left: Float32Array; right: Float32Array } | null {
+    const own = this.own.get(pad)
+    if (own) return own
+    const range = this.sliceRange(pad)
+    if (!range || !this.sample) return null
+    return { left: this.sample.left.subarray(...range), right: this.sample.right.subarray(...range) }
+  }
+
   assignSliceAt(frame: number) {
     if (!this.sample) return
+    if (this.pads[this.selectedPad].sample) this.clearPadSample(this.selectedPad)
     this.checkpoint()
     const slice = Math.max(0, this.markers.findLastIndex((m) => m <= frame))
     const after = [...this.padSlices]
@@ -323,7 +424,7 @@ export class Session {
   private applyPadSlices(after: number[]) {
     this.adopt()
     const before = this.padSlices
-    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX } })
+    const fresh = (): PadSettings => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null })
     this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
     this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
     this.padSlices = after
@@ -399,6 +500,7 @@ export class Session {
     this.pads = doc.pads
     this.labels = doc.labels
     this.kitPending = false
+    this.syncOwn()
     this.sendMarkers()
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
@@ -406,18 +508,39 @@ export class Session {
     this.classifySlices()
   }
 
+  private syncOwn() {
+    this.pads.forEach((p, pad) => {
+      if (!p.sample && this.own.has(pad)) {
+        this.own.delete(pad)
+        this.sily?.send({ type: 'padSample', pad, left: null, right: null })
+      } else if (p.sample && !this.own.has(pad)) {
+        const id = p.sample.id
+        loadSample(id).then((loaded) => {
+          if (!loaded || this.pads[pad].sample?.id !== id) return
+          const left = resample(loaded.left, loaded.meta.sampleRate, this.sampleRate)
+          const right = resample(loaded.right, loaded.meta.sampleRate, this.sampleRate)
+          this.own.set(pad, { left, right })
+          this.sily?.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
+          this.invalidateStretched([pad])
+        })
+      }
+    })
+  }
+
   generateCandidates() {
     if (!this.sample) return
     const secondsPerFrame = 1 / this.sampleRate / this.sourceSpeed.rate
     const pads: PadInfo[] = []
     this.padSlices.forEach((_, pad) => {
+      const own = this.own.get(pad)
       const range = this.sliceRange(pad)
       const label = this.labelOf(pad)
-      if (!range || !label) return
+      if ((!own && !range) || !label) return
+      const seconds = own ? own.left.length / this.sampleRate : (range![1] - range![0]) * secondsPerFrame
       pads.push({
         pad,
         category: label.category,
-        beats: ((range[1] - range[0]) * secondsPerFrame * this.bpm) / 60,
+        beats: (seconds * this.bpm) / 60,
         scores: label.scores,
       })
     })
@@ -704,6 +827,7 @@ export class Session {
       { type: 'padSlices', slices: [...this.padSlices] },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'fx', pad, fx: $state.snapshot(p.fx) })),
+      ...[...this.own].map(([pad, a]): ToWorklet => ({ type: 'padSample', pad, left: a.left, right: a.right })),
       { type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) },
       ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),
       { type: 'groove', grid: this.grid, strength: this.strength, swing: this.swing },
@@ -768,16 +892,21 @@ export class Session {
     const version = this.stretchVersion
     const tapeSemitones = this.sourceSpeed.mode === 'tape' ? rateToSemitones(this.sourceSpeed.rate) : 0
     this.pads.forEach((p, pad) => {
+      const own = this.own.get(pad)
       const range = this.sliceRange(pad)
-      if (!p.stretch || !range) return
+      if (!p.stretch || (!own && !range)) return
       const pitches = new Set([p.pitch, ...this.events.filter((e) => e.pad === pad).map((e) => p.pitch + e.pitch)])
-      const [s, e] = range.map((f) => this.map.toEngine(f))
+      const audio = own ?? {
+        left: source.left.subarray(...range!.map((f) => this.map.toEngine(f))),
+        right: source.right.subarray(...range!.map((f) => this.map.toEngine(f))),
+      }
+      const shift = own ? 0 : tapeSemitones
       const reverse = p.reverse
       for (const pitch of pitches) {
         const key = `${pad}:${Math.round(pitch * 100)}`
         if (this.stretched.has(key) || this.requested.has(key)) continue
         this.requested.add(key)
-        this.track(sily.pitchShift(source.left.subarray(s, e), source.right.subarray(s, e), pitch + tapeSemitones))
+        this.track(sily.pitchShift(audio.left, audio.right, pitch + shift))
           .then((shifted) => {
             if (version !== this.stretchVersion) return
             if (reverse) {

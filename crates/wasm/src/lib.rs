@@ -326,3 +326,9 @@ pub extern "C" fn engine_set_pad_fx(pad: u32, highpass_hz: f32, lowpass_hz: f32,
 pub extern "C" fn engine_set_master_fx(highpass_hz: f32, lowpass_hz: f32, low_db: f32, mid_db: f32, mid_hz: f32, high_db: f32, drive_db: f32, ceiling_db: f32) {
     engine().set_master_fx(fx_settings(highpass_hz, lowpass_hz, low_db, mid_db, mid_hz, high_db, drive_db, ceiling_db));
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_set_pad_sample(pad: u32, left: *const f32, right: *const f32, frames: u32) {
+    let buffer = (frames > 0).then(|| [floats(left, frames).to_vec(), floats(right, frames).to_vec()]);
+    engine().set_pad_sample(pad as usize, buffer);
+}
