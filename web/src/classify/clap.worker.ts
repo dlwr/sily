@@ -13,11 +13,11 @@ const load = () =>
     ClapAudioModelWithProjection.from_pretrained(MODEL, { dtype: 'q8' }),
   ]))
 
-self.onmessage = async (e: MessageEvent<{ id: number; audio: Float32Array }>) => {
+self.onmessage = async (e: MessageEvent<{ id: number; payload: { audio: Float32Array } }>) => {
   try {
     const [processor, model] = await load()
-    const { audio_embeds } = await model(await processor(e.data.audio))
-    self.postMessage({ id: e.data.id, embedding: Array.from(audio_embeds.data as Float32Array) })
+    const { audio_embeds } = await model(await processor(e.data.payload.audio))
+    self.postMessage({ id: e.data.id, result: Array.from(audio_embeds.data as Float32Array) })
   } catch (error) {
     self.postMessage({ id: e.data.id, error: String(error) })
   }
