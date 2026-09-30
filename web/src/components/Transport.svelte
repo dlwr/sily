@@ -4,6 +4,8 @@
 
   let { session }: { session: Session } = $props()
 
+  const NOTES = ['C', 'C#', 'D', 'E♭', 'E', 'F', 'F#', 'G', 'A♭', 'A', 'B♭', 'B']
+
   const position = $derived(`${Math.floor(session.beat / 4) + 1}.${Math.floor(session.beat % 4) + 1}`)
 </script>
 
@@ -45,6 +47,26 @@
       onchange={(e) => session.setTransport({ metronome: e.currentTarget.checked })}
     />
     クリック
+  </label>
+  <label class="group" title="音程のある音を合わせるキー。素材から推定し、選べば固定する">
+    キー
+    <select
+      value={`${session.key.root}:${session.key.minor ? 'm' : ''}`}
+      onchange={(e) => {
+        const [root, mode] = e.currentTarget.value.split(':')
+        session.setKey({ root: Number(root), minor: mode === 'm' })
+      }}
+    >
+      {#each NOTES as note, root}
+        <option value={`${root}:`}>{note}</option>
+        <option value={`${root}:m`}>{note}m</option>
+      {/each}
+    </select>
+    {#if session.keyAuto}<span class="muted">推定</span>{/if}
+  </label>
+  <label class="group" title="分類に合わせて、各パッドのピッチと EQ を自動で整える">
+    <input type="checkbox" checked={session.autoShape} onchange={(e) => session.setAutoShape(e.currentTarget.checked)} />
+    自動で整える
   </label>
   <label class="group" title="全体の音圧を上げる（天井 -0.3dB）">
     マスター
