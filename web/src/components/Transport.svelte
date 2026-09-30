@@ -44,6 +44,18 @@
     />
     クリック
   </label>
+  <label class="group" title="全体の音圧を上げる（天井 -0.3dB）">
+    マスター
+    <input
+      type="range"
+      min="0"
+      max="18"
+      step="0.5"
+      value={session.masterFx.drive_db}
+      oninput={(e) => session.setMasterFx({ drive_db: Number(e.currentTarget.value) })}
+    />
+    <span class="num value">+{session.masterFx.drive_db.toFixed(1)}</span>
+  </label>
   <label class="group">
     グリッド
     <select value={session.grid} onchange={(e) => session.setGroove({ grid: Number(e.currentTarget.value) })}>
