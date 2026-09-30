@@ -298,3 +298,8 @@ pub extern "C" fn engine_queue_commit() {
 pub extern "C" fn result_scores() -> *const f32 {
     unsafe { RESULT_SCORES.as_ptr() }
 }
+
+#[no_mangle]
+pub extern "C" fn engine_set_choke_group(pad: u32, group: i32) {
+    engine().set_choke_group(pad as usize, (group > 0).then_some(group as u8));
+}
