@@ -1,6 +1,7 @@
 use sily_core::classify::{classify, Category, Model};
 use sily_core::engine::Engine;
 use sily_core::features::extract;
+use sily_core::fx::FxSettings;
 use sily_core::sequencer::{Event, Groove};
 use sily_core::slicing::onset_markers;
 use std::alloc::{alloc as raw_alloc, dealloc as raw_dealloc, Layout};
@@ -308,4 +309,20 @@ pub extern "C" fn engine_set_choke_group(pad: u32, group: i32) {
 #[allow(static_mut_refs)]
 pub extern "C" fn engine_queue_replace() {
     engine().set_events(unsafe { std::mem::take(&mut QUEUE) });
+}
+
+fn fx_settings(highpass_hz: f32, lowpass_hz: f32, low_db: f32, mid_db: f32, mid_hz: f32, high_db: f32, drive_db: f32, ceiling_db: f32) -> FxSettings {
+    FxSettings { highpass_hz, lowpass_hz, low_db, mid_db, mid_hz, high_db, drive_db, ceiling_db }
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn engine_set_pad_fx(pad: u32, highpass_hz: f32, lowpass_hz: f32, low_db: f32, mid_db: f32, mid_hz: f32, high_db: f32, drive_db: f32, ceiling_db: f32) {
+    engine().set_pad_fx(pad as usize, fx_settings(highpass_hz, lowpass_hz, low_db, mid_db, mid_hz, high_db, drive_db, ceiling_db));
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn engine_set_master_fx(highpass_hz: f32, lowpass_hz: f32, low_db: f32, mid_db: f32, mid_hz: f32, high_db: f32, drive_db: f32, ceiling_db: f32) {
+    engine().set_master_fx(fx_settings(highpass_hz, lowpass_hz, low_db, mid_db, mid_hz, high_db, drive_db, ceiling_db));
 }
