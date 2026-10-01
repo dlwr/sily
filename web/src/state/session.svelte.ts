@@ -161,6 +161,7 @@ export class Session {
 
   async start() {
     if (this.sily) return
+    if (this.correctionCount > 0) pushCorrections(readCorrections())
     const sily = await Sily.create()
     sily.onTick = (t) => {
       this.beat = t.beat
@@ -544,6 +545,7 @@ export class Session {
     if (features) {
       const corrections = [...readCorrections(), { features, label: category }]
       writeCorrections(corrections)
+      pushCorrections(corrections)
       this.correctionCount = corrections.length
     }
   }
@@ -1273,6 +1275,11 @@ function writeCorrections(corrections: Correction[]) {
   } catch {
     return
   }
+}
+
+function pushCorrections(corrections: Correction[]) {
+  if (!import.meta.env.DEV) return
+  fetch('/__sily/corrections', { method: 'POST', body: JSON.stringify(corrections) }).catch(() => {})
 }
 
 function download(blob: Blob, name: string) {
