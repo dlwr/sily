@@ -55,3 +55,13 @@ def test_split_trims_the_silent_tail(tmp_path):
     render.split(wav, hits, tmp_path / "out", "kit")
     clip, _ = sf.read(next((tmp_path / "out").glob("*/*.wav")))
     assert len(clip) < 0.5 * RATE
+
+
+def test_sheet_packs_audible_hits_with_gaps(tmp_path):
+    hits = render.schedule([36, 38, 42], [100])
+    wav = tmp_path / "kit.wav"
+    sf.write(wav, fake_render(hits, silent_notes={38}), RATE, subtype="PCM_24")
+    count = render.sheet(wav, hits, tmp_path / "sheet.wav")
+    sheet, _ = sf.read(tmp_path / "sheet.wav")
+    assert count == 2
+    assert len(sheet) < 2 * (0.5 + render.SHEET_GAP) * RATE
