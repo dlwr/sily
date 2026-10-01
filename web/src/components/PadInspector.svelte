@@ -104,6 +104,9 @@
   <button onclick={() => session.exportCorrections()} disabled={session.correctionCount === 0}>
     直したラベルを書き出す（{session.correctionCount}）
   </button>
+  {#if session.correctionsSent > 0 || session.correctionsUnsent > 0}
+    <span>直したラベル: 送信済み {session.correctionsSent} 件{#if session.correctionsUnsent > 0}・未送信 {session.correctionsUnsent} 件{/if}</span>
+  {/if}
   {#if session.correctionLogin}
     <a href="/api/corrections/login" target="_blank" rel="noopener">直したラベルを送るにはログイン</a>
   {/if}

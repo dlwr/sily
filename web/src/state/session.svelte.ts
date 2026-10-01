@@ -113,6 +113,8 @@ export class Session {
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
   correctionLogin = $state(false)
+  correctionsSent = $state(0)
+  correctionsUnsent = $state(0)
   style = $state<Style>('boom_bap')
   density = $state(0.5)
   looseness = $state(0.5)
@@ -564,8 +566,11 @@ export class Session {
         break
       }
       this.unsentCorrections.shift()
-      if (result === 'saved') this.correctionLogin = false
-      else this.message = '直したラベルを送れなかった'
+      this.correctionsUnsent = this.unsentCorrections.length
+      if (result === 'saved') {
+        this.correctionLogin = false
+        this.correctionsSent++
+      } else this.message = '直したラベルを送れなかった'
     }
     this.sendingCorrections = false
   }
@@ -576,6 +581,7 @@ export class Session {
     const end = this.markers[slice + 1] ?? this.sample.left.length
     const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
     this.unsentCorrections.push({ wav, label })
+    this.correctionsUnsent = this.unsentCorrections.length
     void this.flushCorrections()
   }
 
