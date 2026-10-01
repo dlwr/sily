@@ -21,7 +21,7 @@ import { generate, type PadInfo, type Style } from '../generate/generate'
 import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { uploadCorrection } from '../corrections/upload'
-import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { followMarkers } from './markers'
@@ -146,6 +146,7 @@ export class Session {
   private features = new Map<number, number[]>()
   private unsentCorrections: { wav: ArrayBuffer; label: Category }[] = []
   private sendingCorrections = false
+  private tickBeat: number | null = null
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
   private loadToken = 0
@@ -169,6 +170,11 @@ export class Session {
     if (this.sily) return
     const sily = await Sily.create()
     sily.onTick = (t) => {
+      if (this.playing) {
+        const now = performance.now()
+        for (const pad of padsPlayedBetween(this.events, this.tickBeat ?? -1e-9, t.beat, this.lengthBeats)) this.hits[pad] = now
+      }
+      this.tickBeat = this.playing ? t.beat : null
       this.beat = t.beat
       this.auditionFrame = t.auditionFrame === null ? null : this.map.fromEngine(t.auditionFrame)
       if (t.auditionFrame !== null) this.lastTick = { frame: t.auditionFrame, time: t.time }
