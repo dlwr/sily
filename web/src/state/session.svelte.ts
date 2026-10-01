@@ -91,6 +91,7 @@ export class Session {
     Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null, pitchAuto: true, fxAuto: true })),
   )
   selectedPad = $state(0)
+  labelingSlice = $state<number | null>(null)
   events = $state<PadEvent[]>([])
   bpm = $state(90)
   bars = $state(1)
@@ -147,6 +148,7 @@ export class Session {
   private unsentCorrections: { wav: ArrayBuffer; label: Category }[] = []
   private sendingCorrections = false
   private tickBeat: number | null = null
+  private labelingTimer: ReturnType<typeof setTimeout> | undefined
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
   private loadToken = 0
@@ -551,7 +553,61 @@ export class Session {
   }
 
   setLabel(pad: number, category: Category) {
-    const start = this.sliceStart(this.padSlices[pad])
+    this.labelSlice(this.padSlices[pad], category)
+  }
+
+  get sliceCount() {
+    return this.sample ? Math.max(1, this.markers.length) : 0
+  }
+
+  sliceLabel(slice: number): Label | null {
+    const start = this.sliceStart(slice)
+    return start === null ? null : (this.labels[start] ?? null)
+  }
+
+  startLabeling() {
+    if (this.sliceCount === 0) return
+    this.showLabelingSlice(0)
+  }
+
+  stopLabeling() {
+    clearTimeout(this.labelingTimer)
+    this.stopAudition()
+    this.labelingSlice = null
+  }
+
+  showLabelingSlice(slice: number) {
+    if (slice < 0 || slice >= this.sliceCount) return
+    this.labelingSlice = slice
+    this.playSlice(slice)
+  }
+
+  labelAndNext(category: Category) {
+    if (this.labelingSlice === null) return
+    const slice = this.labelingSlice
+    this.labelSlice(slice, category)
+    if (slice + 1 < this.sliceCount) this.showLabelingSlice(slice + 1)
+    else this.stopLabeling()
+  }
+
+  labelingRange(): [number, number] | null {
+    const start = this.labelingSlice === null ? null : this.sliceStart(this.labelingSlice)
+    if (start === null || !this.sample) return null
+    return [start, this.markers[this.labelingSlice! + 1] ?? this.sample.left.length]
+  }
+
+  playSlice(slice: number) {
+    const start = this.sliceStart(slice)
+    if (start === null || !this.sample) return
+    const end = this.markers[slice + 1] ?? this.sample.left.length
+    const rate = this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1
+    clearTimeout(this.labelingTimer)
+    this.auditionFrom(start)
+    this.labelingTimer = setTimeout(() => this.stopAudition(), Math.min(4000, ((end - start) / this.sampleRate / rate) * 1000))
+  }
+
+  labelSlice(slice: number, category: Category) {
+    const start = this.sliceStart(slice)
     if (start === null) return
     this.checkpoint()
     this.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
@@ -563,7 +619,7 @@ export class Session {
       writeCorrections(corrections)
       this.correctionCount = corrections.length
     }
-    this.sendCorrection(this.padSlices[pad], category)
+    this.sendCorrection(slice, category)
   }
 
   async flushCorrections() {

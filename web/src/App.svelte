@@ -1,5 +1,6 @@
 <script lang="ts">
   import Generator from './components/Generator.svelte'
+  import LabelingPanel from './components/LabelingPanel.svelte'
   import PadInspector from './components/PadInspector.svelte'
   import Pads from './components/Pads.svelte'
   import PatternGrid from './components/PatternGrid.svelte'
@@ -7,7 +8,7 @@
   import SourceSpeed from './components/SourceSpeed.svelte'
   import Transport from './components/Transport.svelte'
   import Waveform from './components/Waveform.svelte'
-  import { noteForCode, padForCode } from './state/keymap'
+  import { labelForCode, noteForCode, padForCode } from './state/keymap'
   import { Session } from './state/session.svelte'
 
   const session = new Session()
@@ -39,6 +40,10 @@
       return
     }
     if (e.metaKey || e.ctrlKey) return
+    if (session.labelingSlice !== null) {
+      onLabelingKey(e, session.labelingSlice)
+      return
+    }
     switch (e.code) {
       case 'Space':
         e.preventDefault()
@@ -59,6 +64,10 @@
         session.markAtKey(e.timeStamp)
         return
     }
+    if (e.code === 'KeyL' && !session.keyboardMode) {
+      session.startLabeling()
+      return
+    }
     if (e.code === 'KeyG' && !session.keyboardMode) {
       session.generateCandidates()
       return
@@ -72,6 +81,27 @@
     if (pad !== undefined) {
       e.preventDefault()
       session.padDown(pad, e.timeStamp)
+    }
+  }
+
+  const onLabelingKey = (e: KeyboardEvent, slice: number) => {
+    const label = labelForCode(e.code)
+    if (label) return session.labelAndNext(label)
+    const current = session.sliceLabel(slice)
+    switch (e.code) {
+      case 'ArrowLeft':
+        return session.showLabelingSlice(slice - 1)
+      case 'ArrowRight':
+        return session.showLabelingSlice(slice + 1)
+      case 'Space':
+        e.preventDefault()
+        return session.playSlice(slice)
+      case 'Enter':
+        e.preventDefault()
+        if (current) session.labelAndNext(current.category)
+        return
+      case 'Escape':
+        return session.stopLabeling()
     }
   }
 
@@ -109,6 +139,7 @@
       <Waveform {session} />
       <SourceSpeed {session} />
       <SliceTools {session} />
+      {#if session.labelingSlice !== null}<LabelingPanel {session} />{/if}
     </section>
     <section class="play">
       <div class="pad-area">

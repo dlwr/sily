@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { noteForCode, padForCode } from './keymap'
+import { LABEL_KEYS, labelForCode, noteForCode, padForCode } from './keymap'
 
 describe('padForCode', () => {
   it('maps the bottom row to pads 1-4 like an MPC', () => {
@@ -26,5 +26,23 @@ describe('noteForCode', () => {
 
   it('ignores keys that are not notes', () => {
     expect(noteForCode('KeyR')).toBeUndefined()
+  })
+})
+
+describe('labelForCode', () => {
+  it('maps K to kick', () => {
+    expect(labelForCode('KeyK')).toBe('kick')
+  })
+
+  it('maps H to a closed hat', () => {
+    expect(labelForCode('KeyH')).toBe('closed_hat')
+  })
+
+  it('ignores keys without a label', () => {
+    expect(labelForCode('KeyZ')).toBeUndefined()
+  })
+
+  it('gives every key its own label', () => {
+    expect(new Set(LABEL_KEYS.map(([, label]) => label)).size).toBe(LABEL_KEYS.length)
   })
 })

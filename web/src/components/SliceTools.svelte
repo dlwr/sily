@@ -81,6 +81,11 @@
     {/each}
     <button onclick={() => session.clearMarkers()} disabled={session.markers.length === 0}>マーカー消去</button>
   </div>
+  <div class="group">
+    <button aria-pressed={session.labelingSlice !== null} onclick={() => (session.labelingSlice === null ? session.startLabeling() : session.stopLabeling())} disabled={!session.sample}>
+      ラベル付け <kbd>L</kbd>
+    </button>
+  </div>
   <p class="hint muted">
     ピンチか Ctrl+ホイールで拡大、横スクロールで移動 / クリックで試聴位置 / ダブルクリックでそのスライスを選択中のパッドへ / Shift+クリックでマーカー追加 / 右クリックで削除 / マーカーはドラッグで移動
   </p>
