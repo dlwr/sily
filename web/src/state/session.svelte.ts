@@ -1348,7 +1348,8 @@ export class Session {
 
   setTransport(patch: Partial<{ bpm: number; bars: number; metronome: boolean }>) {
     Object.assign(this, patch)
-    this.syncTransport()
+    if (this.songMode && patch.bars !== undefined) this.syncSong()
+    else this.syncTransport()
   }
 
   setGroove(patch: Partial<{ grid: number; strength: number; swing: number }>) {
