@@ -22,7 +22,7 @@ from sklearn.model_selection import cross_val_predict
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FEATURES_BIN = ROOT / "target" / "release" / "features"
 MODEL_OUT = ROOT / "web" / "src" / "classify" / "model.json"
-CORRECTIONS = ROOT / "tmp" / "train" / "corrections"
+EXTRA_FOLDERS = [ROOT / "tmp" / "train" / "corrections", ROOT / "tmp" / "train" / "render"]
 AUDIO = {".wav", ".mp3", ".ogg", ".flac", ".aif", ".aiff"}
 UPPER_KINDS = {"keys", "vocal", "melody", "fx"}
 
@@ -73,8 +73,8 @@ def main() -> None:
     parser.add_argument("--out", type=pathlib.Path, default=MODEL_OUT)
     args = parser.parse_args()
 
-    if CORRECTIONS.exists() and CORRECTIONS.resolve() not in [f.resolve() for f in args.folders]:
-        args.folders.append(CORRECTIONS)
+    given = [f.resolve() for f in args.folders]
+    args.folders += [f for f in EXTRA_FOLDERS if f.exists() and f.resolve() not in given]
     xs, ys = load_folders(args.folders)
     cx, cy = load_corrections(args.corrections)
     width = len(xs[0]) if xs else 0
