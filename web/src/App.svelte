@@ -180,6 +180,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 20px;
+    width: min(100%, 340px);
   }
 
   .pattern-area {
