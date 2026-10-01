@@ -7,6 +7,7 @@
 
   const slice = $derived(session.labelingSlice ?? 0)
   const label = $derived(session.sliceLabel(slice))
+  const previous = $derived(slice > 0 ? session.sliceLabel(slice - 1) : null)
 </script>
 
 <div class="labeling">
@@ -29,6 +30,9 @@
     <button onclick={() => session.showLabelingSlice(slice - 1)} disabled={slice === 0}><kbd>←</kbd>前</button>
     <button onclick={() => session.playSlice(slice)}><kbd>Space</kbd>もう一度聴く</button>
     <button onclick={() => label && session.labelAndNext(label.category)} disabled={!label}><kbd>Enter</kbd>このラベルで合っている</button>
+    <button onclick={() => previous && session.labelAndNext(previous.category)} disabled={!previous}>
+      <kbd>.</kbd>前と同じ{previous ? `（${CATEGORY_LABELS[previous.category]}）` : ''}
+    </button>
     <button onclick={() => session.showLabelingSlice(slice + 1)} disabled={slice + 1 >= session.sliceCount}><kbd>→</kbd>飛ばす</button>
     <button onclick={() => session.stopLabeling()}><kbd>Esc</kbd>終わる</button>
   </div>

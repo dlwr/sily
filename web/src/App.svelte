@@ -100,6 +100,11 @@
         e.preventDefault()
         if (current) session.labelAndNext(current.category)
         return
+      case 'Period': {
+        const previous = session.sliceLabel(slice - 1)
+        if (slice > 0 && previous) session.labelAndNext(previous.category)
+        return
+      }
       case 'Escape':
         return session.stopLabeling()
     }

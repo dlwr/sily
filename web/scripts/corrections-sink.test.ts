@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -26,5 +26,12 @@ describe('fileStore', () => {
     await fileStore(dir).save(id, 'kick', audio)
     await fileStore(dir).save(id, 'snare', audio)
     expect(await readdir(join(dir, 'snare'))).toEqual([`${id}.wav`])
+  })
+
+  it('ignores stray files next to the label folders', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
+    await writeFile(join(dir, '.DS_Store'), '')
+    await fileStore(dir).save(id, 'kick', audio)
+    expect(await readdir(join(dir, 'kick'))).toEqual([`${id}.wav`])
   })
 })
