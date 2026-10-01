@@ -48,7 +48,7 @@ uv run tools/train/train.py tmp/train/freesound
 
 ラベルを直すと、そのスライスの音声が送られる。`pnpm dev` では `tmp/train/corrections/<ラベル>/` に直接保存され、本番では D1 と R2 に溜まる（書き込みは Cloudflare Access でログインした本人だけ）。`pull.py` は本番の分を同じフォルダに取ってくる。`train.py` はこのフォルダがあれば自動で学習に含める。
 
-手持ちのドラム音源からも集められる。`render.py midi` が GM のドラムを1発ずつ鳴らす MIDI を作るので、DAW で音源に鳴らして小節1の頭から WAV に書き出し、`render.py split` で切ると `tmp/train/render/<ラベル>/` に入り、これも学習に含まれる。
+手持ちのドラム音源からも集められる。`render.py midi` が GM のドラムを1発ずつ鳴らす MIDI を作るので、DAW のテンポを 120 にして音源に鳴らし、小節1の頭から WAV に書き出し、`render.py split` で切ると `tmp/train/render/<ラベル>/` に入り、これも学習に含まれる。
 
 ```sh
 uv run tools/train/render.py midi tmp/render/hits.mid

@@ -5,7 +5,7 @@
 """ドラム音源を1発ずつ鳴らす MIDI を作り、それを書き出した WAV を GM 配列のラベルで切り分ける。
 
     uv run tools/train/render.py midi tmp/render/hits.mid
-    （DAW で MIDI をドラム音源に鳴らし、小節1の頭から WAV に書き出す）
+    （DAW のテンポを 120 にして MIDI をドラム音源に鳴らし、小節1の頭から WAV に書き出す）
     uv run tools/train/render.py split tmp/render/acoustic-kit.wav
 
 切った音は tmp/train/render/<ラベル>/ に入り、train.py が自動で読み込む。
