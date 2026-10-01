@@ -20,7 +20,8 @@ import { untrack } from 'svelte'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
-import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { uploadCorrection } from '../corrections/upload'
+import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { followMarkers } from './markers'
@@ -111,6 +112,9 @@ export class Session {
   padSlices = $state<number[]>(identity())
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
+  correctionLogin = $state(false)
+  correctionsSent = $state(0)
+  correctionsUnsent = $state(0)
   style = $state<Style>('boom_bap')
   density = $state(0.5)
   looseness = $state(0.5)
@@ -140,6 +144,9 @@ export class Session {
   private engineSample: { left: Float32Array; right: Float32Array } | null = null
   private loadedStretch: number | null = null
   private features = new Map<number, number[]>()
+  private unsentCorrections: { wav: ArrayBuffer; label: Category }[] = []
+  private sendingCorrections = false
+  private tickBeat: number | null = null
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
   private loadToken = 0
@@ -163,6 +170,11 @@ export class Session {
     if (this.sily) return
     const sily = await Sily.create()
     sily.onTick = (t) => {
+      if (this.playing) {
+        const now = performance.now()
+        for (const pad of padsPlayedBetween(this.events, this.tickBeat ?? -1e-9, t.beat, this.lengthBeats)) this.hits[pad] = now
+      }
+      this.tickBeat = this.playing ? t.beat : null
       this.beat = t.beat
       this.auditionFrame = t.auditionFrame === null ? null : this.map.fromEngine(t.auditionFrame)
       if (t.auditionFrame !== null) this.lastTick = { frame: t.auditionFrame, time: t.time }
@@ -546,6 +558,37 @@ export class Session {
       writeCorrections(corrections)
       this.correctionCount = corrections.length
     }
+    this.sendCorrection(this.padSlices[pad], category)
+  }
+
+  async flushCorrections() {
+    if (this.sendingCorrections) return
+    this.sendingCorrections = true
+    while (this.unsentCorrections.length > 0) {
+      const { wav, label } = this.unsentCorrections[0]
+      const result = await uploadCorrection(wav, label)
+      if (result === 'login') {
+        this.correctionLogin = true
+        break
+      }
+      this.unsentCorrections.shift()
+      this.correctionsUnsent = this.unsentCorrections.length
+      if (result === 'saved') {
+        this.correctionLogin = false
+        this.correctionsSent++
+      } else this.message = '直したラベルを送れなかった'
+    }
+    this.sendingCorrections = false
+  }
+
+  private sendCorrection(slice: number, label: Category) {
+    const start = this.sliceStart(slice)
+    if (start === null || !this.sample) return
+    const end = this.markers[slice + 1] ?? this.sample.left.length
+    const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
+    this.unsentCorrections.push({ wav, label })
+    this.correctionsUnsent = this.unsentCorrections.length
+    void this.flushCorrections()
   }
 
   exportCorrections() {

@@ -158,6 +158,18 @@
     oncontextmenu={(e) => e.preventDefault()}
     ondblclick={(e) => session.assignSliceAt(frameOfX(e.offsetX))}
   ></canvas>
+  {#each session.hits as hit, pad}
+    {@const range = hit > 0 && session.pads[pad].sample === null ? session.sliceRange(pad) : null}
+    {#if range}
+      {#key hit}
+        <div
+          class="hit"
+          style:left="{xOfFrame(range[0])}px"
+          style:width="{Math.max(2, xOfFrame(range[1]) - xOfFrame(range[0]))}px"
+        ></div>
+      {/key}
+    {/if}
+  {/each}
   {#if session.auditionFrame !== null && session.sample}
     <div class="playhead" style:transform="translateX({xOfFrame(session.auditionFrame)}px)"></div>
   {/if}
@@ -196,6 +208,25 @@
     width: 2px;
     background: var(--accent);
     pointer-events: none;
+  }
+
+  .hit {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    animation: hit 260ms ease-out;
+  }
+
+  @keyframes hit {
+    from {
+      opacity: 0.4;
+    }
+    to {
+      opacity: 0;
+    }
   }
 
   .overview {

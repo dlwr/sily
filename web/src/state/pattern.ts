@@ -44,3 +44,12 @@ export const changeVelocity = (events: PadEvent[], id: string, delta: number): P
       ? { ...e, velocity: Math.round(Math.max(MIN_VELOCITY, Math.min(1, e.velocity + delta)) * 100) / 100, auto: false }
       : e,
   )
+
+export const padsPlayedBetween = (events: PadEvent[], from: number, to: number, length: number): number[] => {
+  if (from === to) return []
+  const within = (beat: number) => {
+    const at = (((beat % length) + length) % length)
+    return from < to ? from < at && at <= to : at > from || at <= to
+  }
+  return [...new Set(events.filter((e) => within(e.beat + e.nudge)).map((e) => e.pad))].sort((a, b) => a - b)
+}

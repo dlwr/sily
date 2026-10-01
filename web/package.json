@@ -7,11 +7,12 @@
     "dev": "pnpm wasm && vite",
     "build": "pnpm wasm && vite build && rm -f dist/assets/ort-wasm-*.wasm",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.worker.json",
     "wasm": "cargo build -p sily-wasm --target wasm32-wasip1 --release --manifest-path ../Cargo.toml && cp ../target/wasm32-wasip1/release/sily_wasm.wasm src/wasm/sily.wasm",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260930.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.13.3",
@@ -25,6 +26,7 @@
   "packageManager": "pnpm@10.26.2",
   "dependencies": {
     "@huggingface/transformers": "^4.3.0",
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "jose": "^6.2.12"
   }
 }

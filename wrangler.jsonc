@@ -1,7 +1,26 @@
 {
   "name": "sily",
   "compatibility_date": "2026-09-30",
+  "main": "./web/worker/index.ts",
   "assets": {
-    "directory": "./web/dist"
-  }
+    "directory": "./web/dist",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sily",
+      "database_id": "cc2b89d4-a38a-43d5-a62d-e9c3d76ce235"
+    }
+  ],
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "silent-meadow-5d82.cloudflareaccess.com",
+    "ACCESS_AUD": "ae0a02a22d9b4afc492e1ad2bce0fe52e0beec903eace051fca8d7310807c24a"
+  },
+  "r2_buckets": [
+    {
+      "binding": "AUDIO",
+      "bucket_name": "sily-corrections"
+    }
+  ]
 }

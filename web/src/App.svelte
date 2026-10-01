@@ -82,7 +82,7 @@
   }
 </script>
 
-<svelte:window {onkeydown} ondragover={(e) => e.preventDefault()} {ondrop} />
+<svelte:window {onkeydown} ondragover={(e) => e.preventDefault()} {ondrop} onfocus={() => session.correctionLogin && session.flushCorrections()} />
 
 {#if !session.sily}
   <main class="start">
@@ -180,6 +180,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 20px;
+    width: min(100%, 340px);
   }
 
   .pattern-area {

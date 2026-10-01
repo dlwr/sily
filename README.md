@@ -41,7 +41,8 @@ pnpm dev
 echo "FREESOUND_API_KEY=..." > .env
 uv run tools/train/fetch.py --per-class 300
 cargo build -p sily-tools --release
-uv run tools/train/train.py tmp/train/freesound --corrections ~/Downloads/sily-corrections.json
+uv run tools/train/pull.py
+uv run tools/train/train.py tmp/train/freesound
 ```
 
-`--corrections` には、アプリの「直したラベルを書き出す」で保存した JSON を渡せる。
+ラベルを直すと、そのスライスの音声が送られる。`pnpm dev` では `tmp/train/corrections/<ラベル>/` に直接保存され、本番では D1 と R2 に溜まる（書き込みは Cloudflare Access でログインした本人だけ）。`pull.py` は本番の分を同じフォルダに取ってくる。`train.py` はこのフォルダがあれば自動で学習に含める。

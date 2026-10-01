@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 
 const at = (beat: number, pad = 0, id = `${pad}@${beat}`): PadEvent => ({ id, beat, pad, velocity: 1, nudge: 0, pitch: 0 })
 
@@ -81,5 +81,26 @@ describe('changeVelocity', () => {
 
   it('claims a generated note', () => {
     expect(changeVelocity([{ ...at(1, 0, 'a'), auto: true }], 'a', -0.1)[0].auto).toBe(false)
+  })
+})
+
+describe('padsPlayedBetween', () => {
+  const ev = (pad: number, beat: number, nudge = 0) => ({ id: `${pad}-${beat}`, beat, pad, velocity: 1, nudge, pitch: 0 })
+  const events = [ev(0, 0), ev(1, 1), ev(2, 2.5), ev(3, 3.9)]
+
+  it('returns the pads whose notes fall after from and up to to', () => {
+    expect(padsPlayedBetween(events, 0.5, 2.5, 4)).toEqual([1, 2])
+  })
+
+  it('wraps around the end of the loop', () => {
+    expect(padsPlayedBetween(events, 3.5, 0.2, 4)).toEqual([0, 3])
+  })
+
+  it('places a note by its nudge', () => {
+    expect(padsPlayedBetween([ev(5, 1, 0.3)], 1.1, 1.4, 4)).toEqual([5])
+  })
+
+  it('returns nothing when the beat has not moved', () => {
+    expect(padsPlayedBetween(events, 1, 1, 4)).toEqual([])
   })
 })
