@@ -16,7 +16,10 @@ BUCKET = "sily-corrections"
 
 
 def wrangler(*args: str) -> str:
-    return subprocess.run(["wrangler", *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    result = subprocess.run(["wrangler", *args], cwd=ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"wrangler {' '.join(args[:2])} failed:\n{result.stderr or result.stdout}")
+    return result.stdout
 
 
 def main() -> None:
