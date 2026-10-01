@@ -4,7 +4,7 @@ use crate::slicing::slices;
 
 pub const PADS: usize = 16;
 const VOICES: usize = 32;
-const MAX_EVENTS: usize = 4096;
+const MAX_EVENTS: usize = 16384;
 
 #[derive(Debug, Clone, Default)]
 struct Pad {
@@ -1024,6 +1024,16 @@ mod tests {
         e.queue_pattern(vec![], 4.0);
         render(&mut e, 2000);
         assert!((e.beat() - 1.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_long_song_plays_its_last_event() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_pattern_length(10_000.0);
+        let mut events: Vec<Event> = (0..9_999).map(|i| Event { velocity: 0.0, ..at(i as f64, 1) }).collect();
+        events.push(at(9_999.5, 0));
+        e.set_events(events);
+        assert!(e.pattern.events().iter().any(|ev| ev.beat == 9_999.5));
     }
 
     #[test]
