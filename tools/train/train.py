@@ -22,7 +22,7 @@ from sklearn.model_selection import cross_val_predict
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FEATURES_BIN = ROOT / "target" / "release" / "features"
 MODEL_OUT = ROOT / "web" / "src" / "classify" / "model.json"
-CORRECTIONS = ROOT / "tmp" / "corrections.json"
+CORRECTIONS = ROOT / "tmp" / "train" / "corrections"
 AUDIO = {".wav", ".mp3", ".ogg", ".flac", ".aif", ".aiff"}
 
 
@@ -64,13 +64,13 @@ def load_corrections(files: list[pathlib.Path]) -> tuple[list[list[float]], list
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("folders", nargs="+", type=pathlib.Path)
-    parser.add_argument("--corrections", nargs="*", type=pathlib.Path)
+    parser.add_argument("--corrections", nargs="*", type=pathlib.Path, default=[])
     parser.add_argument("--out", type=pathlib.Path, default=MODEL_OUT)
     args = parser.parse_args()
 
+    if CORRECTIONS.exists() and CORRECTIONS.resolve() not in [f.resolve() for f in args.folders]:
+        args.folders.append(CORRECTIONS)
     xs, ys = load_folders(args.folders)
-    if args.corrections is None:
-        args.corrections = [CORRECTIONS] if CORRECTIONS.exists() else []
     cx, cy = load_corrections(args.corrections)
     width = len(xs[0]) if xs else 0
     kept = [(f, label) for f, label in zip(cx, cy) if len(f) == width]
