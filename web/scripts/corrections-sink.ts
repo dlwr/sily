@@ -1,39 +1,33 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Plugin } from 'vite'
+import { handleCorrections, type CorrectionStore } from '../worker/corrections.ts'
 
-const isCorrection = (row: unknown) => {
-  const { features, label } = (row ?? {}) as { features?: unknown; label?: unknown }
-  return Array.isArray(features) && features.every((v) => typeof v === 'number') && typeof label === 'string'
-}
+export const fileStore = (dir: string): CorrectionStore => ({
+  async save(id, label, audio) {
+    const labels = await readdir(dir).catch(() => [])
+    await Promise.all(labels.map((other) => rm(join(dir, other, `${id}.wav`), { force: true })))
+    await mkdir(join(dir, label), { recursive: true })
+    await writeFile(join(dir, label, `${id}.wav`), new Uint8Array(audio))
+  },
+})
 
-export async function saveCorrections(body: string, file: string) {
-  const corrections: unknown = JSON.parse(body)
-  if (!Array.isArray(corrections) || !corrections.every(isCorrection)) throw new Error('not a list of corrections')
-  await mkdir(dirname(file), { recursive: true })
-  await writeFile(file, JSON.stringify(corrections))
-}
-
-export function correctionsSink(file: string): Plugin {
+export function correctionsSink(dir: string): Plugin {
+  const store = fileStore(dir)
   return {
     name: 'sily-corrections-sink',
     apply: 'serve',
     configureServer(server) {
-      server.middlewares.use('/__sily/corrections', async (req, res) => {
-        if (req.method !== 'POST') {
-          res.statusCode = 405
-          res.end()
-          return
-        }
-        let body = ''
-        for await (const chunk of req) body += chunk
-        try {
-          await saveCorrections(body, file)
-          res.statusCode = 204
-        } catch {
-          res.statusCode = 400
-        }
-        res.end()
+      server.middlewares.use('/api/corrections', async (req, res) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of req) chunks.push(chunk)
+        const request = new Request(`http://localhost${req.originalUrl}`, {
+          method: req.method,
+          body: chunks.length > 0 ? Buffer.concat(chunks) : undefined,
+        })
+        const response = await handleCorrections(request, store)
+        res.statusCode = response.status
+        res.end(Buffer.from(await response.arrayBuffer()))
       })
     },
   }

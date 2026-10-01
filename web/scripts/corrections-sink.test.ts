@@ -1,28 +1,30 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { saveCorrections } from './corrections-sink'
+import { fileStore } from './corrections-sink'
 
-const target = async () => join(await mkdtemp(join(tmpdir(), 'sily-')), 'nested', 'corrections.json')
+const id = 'a'.repeat(64)
+const audio = new Uint8Array([1, 2, 3]).buffer
 
-describe('saveCorrections', () => {
-  it('writes the posted corrections to the file', async () => {
-    const file = await target()
-    const corrections = [{ features: [0.1, 0.2], label: 'kick' }]
-    await saveCorrections(JSON.stringify(corrections), file)
-    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(corrections)
+describe('fileStore', () => {
+  it('writes the audio into the folder for its label', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
+    await fileStore(dir).save(id, 'kick', audio)
+    expect([...(await readFile(join(dir, 'kick', `${id}.wav`)))]).toEqual([1, 2, 3])
   })
 
-  it('replaces what was written before', async () => {
-    const file = await target()
-    await saveCorrections(JSON.stringify([{ features: [1], label: 'kick' }]), file)
-    await saveCorrections(JSON.stringify([{ features: [2], label: 'snare' }]), file)
-    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual([{ features: [2], label: 'snare' }])
+  it('moves the audio when it is labelled again', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
+    await fileStore(dir).save(id, 'kick', audio)
+    await fileStore(dir).save(id, 'snare', audio)
+    expect(await readdir(join(dir, 'kick'))).toEqual([])
   })
 
-  it('rejects a body that is not a list of corrections', async () => {
-    const file = await target()
-    await expect(saveCorrections(JSON.stringify([{ features: 'x', label: 'kick' }]), file)).rejects.toThrow()
+  it('keeps the audio under the new label', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
+    await fileStore(dir).save(id, 'kick', audio)
+    await fileStore(dir).save(id, 'snare', audio)
+    expect(await readdir(join(dir, 'snare'))).toEqual([`${id}.wav`])
   })
 })
