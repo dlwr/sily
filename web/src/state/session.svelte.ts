@@ -24,6 +24,7 @@ import { uploadCorrection } from '../corrections/upload'
 import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
+import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers } from './markers'
 import { frameAt } from './timing'
 
@@ -45,8 +46,13 @@ export type Label = {
   manual: boolean
   scores: Partial<Record<Category, number>>
 }
+type Heard = { events: PadEvent[]; length: number }
+
 type Doc = {
   events: PadEvent[]
+  patterns: Pattern[]
+  currentPattern: string
+  song: string[]
   markers: number[]
   padSlices: number[]
   pads: PadSettings[]
@@ -92,6 +98,12 @@ export class Session {
   )
   selectedPad = $state(0)
   labelingSlice = $state<number | null>(null)
+  patterns = $state<Pattern[]>([])
+  currentPattern = $state('A')
+  song = $state<string[]>([])
+  songMode = $state(false)
+  muted = $state<boolean[]>(Array(PADS).fill(false))
+  soloed = $state<boolean[]>(Array(PADS).fill(false))
   events = $state<PadEvent[]>([])
   bpm = $state(90)
   bars = $state(1)
@@ -148,6 +160,8 @@ export class Session {
   private unsentCorrections: { wav: ArrayBuffer; label: Category }[] = []
   private sendingCorrections = false
   private tickBeat: number | null = null
+  private heard: Heard | null = null
+  private switchPending = false
   private labelingTimer: ReturnType<typeof setTimeout> | undefined
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
@@ -160,8 +174,112 @@ export class Session {
   private own = new Map<number, { id: string; left: Float32Array; right: Float32Array }>()
   private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
-  get lengthBeats() {
+  get patternBeats() {
     return this.bars * 4
+  }
+
+  get lengthBeats() {
+    return this.songMode ? flattenSong(this.allPatterns(), this.song).lengthBeats : this.patternBeats
+  }
+
+  allPatterns(): Pattern[] {
+    const current = { name: this.currentPattern, bars: this.bars, events: this.events }
+    return [...this.patterns.filter((p) => p.name !== current.name), current].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  songPosition(): { index: number; beat: number } {
+    return this.songMode ? sectionAt(this.allPatterns(), this.song, this.beat) : { index: -1, beat: this.beat }
+  }
+
+  selectPattern(name: string) {
+    if (name === this.currentPattern) return
+    this.checkpoint()
+    this.adopt()
+    const before = this.heardNow()
+    this.patterns = this.allPatterns()
+    const next = this.patterns.find((p) => p.name === name) ?? { name, bars: this.bars, events: [] }
+    this.currentPattern = name
+    this.events = next.events
+    this.bars = next.bars
+    if (this.songMode) return
+    if (this.playing) {
+      this.queueEvents(before, this.lengthBeats)
+    } else {
+      this.syncTransport()
+      this.syncEvents()
+    }
+  }
+
+  copyPatternTo(name: string) {
+    if (name === this.currentPattern) return
+    const copy = copyPattern({ name: this.currentPattern, bars: this.bars, events: this.events }, name)
+    this.patterns = [...this.allPatterns().filter((p) => p.name !== name), copy]
+    this.selectPattern(name)
+  }
+
+  hasPattern(name: string) {
+    return this.allPatterns().some((p) => p.name === name && (p.events.length > 0 || p.name === this.currentPattern))
+  }
+
+  addToSong(name: string) {
+    this.checkpoint()
+    this.song = [...this.song, name]
+    if (this.songMode) this.syncSong()
+  }
+
+  removeFromSong(index: number) {
+    this.checkpoint()
+    this.song = this.song.filter((_, i) => i !== index)
+    if (this.song.length === 0) this.setSongMode(false)
+    else if (this.songMode) this.syncSong()
+  }
+
+  setSongMode(on: boolean) {
+    if (on && this.song.length === 0) return
+    this.adopt()
+    this.playing = false
+    this.recording = false
+    this.songMode = on
+    this.syncSong()
+  }
+
+  toggleMute(pad: number) {
+    this.muted[pad] = !this.muted[pad]
+    this.syncEvents()
+  }
+
+  toggleSolo(pad: number) {
+    this.soloed[pad] = !this.soloed[pad]
+    this.syncEvents()
+  }
+
+  audible(pad: number) {
+    return this.soloed.some(Boolean) ? this.soloed[pad] : !this.muted[pad]
+  }
+
+  private syncSong() {
+    this.syncTransport()
+    this.syncEvents()
+  }
+
+  private flashPlayed(from: number, to: number) {
+    const now = performance.now()
+    const flash = ({ events, length }: Heard, a: number, b: number) => {
+      for (const pad of padsPlayedBetween(events, a, b, length)) this.hits[pad] = now
+    }
+    if (this.switchPending && to < from) {
+      flash(this.heard ?? this.heardNow(), from, this.heard?.length ?? this.lengthBeats)
+      this.heard = null
+      this.switchPending = false
+      flash(this.heardNow(), -1e-9, to)
+    } else {
+      flash(this.heard ?? this.heardNow(), from, to)
+    }
+  }
+
+  private playbackEvents(): PadEvent[] {
+    const events = this.songMode ? flattenSong(this.allPatterns(), this.song).events : this.events
+    return events.filter((e) => this.audible(e.pad))
   }
 
   get sampleRate() {
@@ -172,16 +290,14 @@ export class Session {
     if (this.sily) return
     const sily = await Sily.create()
     sily.onTick = (t) => {
-      if (this.playing) {
-        const now = performance.now()
-        for (const pad of padsPlayedBetween(this.events, this.tickBeat ?? -1e-9, t.beat, this.lengthBeats)) this.hits[pad] = now
-      }
+      if (this.playing) this.flashPlayed(this.tickBeat ?? -1e-9, t.beat)
       this.tickBeat = this.playing ? t.beat : null
       this.beat = t.beat
       this.auditionFrame = t.auditionFrame === null ? null : this.map.fromEngine(t.auditionFrame)
       if (t.auditionFrame !== null) this.lastTick = { frame: t.auditionFrame, time: t.time }
     }
     sily.onRecorded = (r) => {
+      if (this.songMode) return
       this.checkpoint('record')
       this.adopt()
       this.events = recordHit(this.events, r.pad, r.beat, r.velocity, r.pitch)
@@ -211,6 +327,11 @@ export class Session {
       padSlices: this.padSlices,
       pads: this.pads,
       events: this.events,
+      patterns: this.allPatterns(),
+      currentPattern: this.currentPattern,
+      song: this.song,
+      muted: this.muted,
+      soloed: this.soloed,
       labels: this.labels,
       bpm: this.bpm,
       bars: this.bars,
@@ -281,6 +402,7 @@ export class Session {
     this.clearSource()
     this.pads = Array.from({ length: PADS }, freshPad)
     this.events = []
+    this.resetSong()
     this.masterFx = { ...DEFAULT_FX }
     this.syncOwn()
     this.pads.forEach((_, pad) => this.sendPad(pad))
@@ -320,6 +442,12 @@ export class Session {
     this.events = st.events ?? []
     this.bpm = st.bpm ?? this.bpm
     this.bars = st.bars ?? this.bars
+    this.resetSong()
+    this.patterns = st.patterns ?? []
+    this.currentPattern = st.currentPattern ?? 'A'
+    this.song = st.song ?? []
+    this.muted = st.muted ?? Array(PADS).fill(false)
+    this.soloed = st.soloed ?? Array(PADS).fill(false)
     this.metronome = st.metronome ?? this.metronome
     this.grid = st.grid ?? this.grid
     this.strength = st.strength ?? this.strength
@@ -906,6 +1034,9 @@ export class Session {
   private doc(): Doc {
     return $state.snapshot({
       events: this.events,
+      patterns: this.allPatterns(),
+      currentPattern: this.currentPattern,
+      song: this.song,
       markers: this.markers,
       padSlices: this.padSlices,
       pads: this.pads,
@@ -916,6 +1047,12 @@ export class Session {
   private restore(doc: Doc) {
     this.adopt()
     this.events = doc.events
+    this.patterns = doc.patterns
+    this.currentPattern = doc.currentPattern
+    this.song = doc.song
+    this.bars = doc.patterns.find((p) => p.name === doc.currentPattern)?.bars ?? this.bars
+    if (this.song.length === 0) this.songMode = false
+    this.syncTransport()
     this.markers = doc.markers
     this.padSlices = doc.padSlices
     this.pads = doc.pads
@@ -951,7 +1088,7 @@ export class Session {
   }
 
   generateCandidates() {
-    if (!this.sample) return
+    if (!this.sample || this.songMode) return
     const secondsPerFrame = 1 / this.sampleRate / this.sourceSpeed.rate
     const pads: PadInfo[] = []
     this.padSlices.forEach((_, pad) => {
@@ -977,7 +1114,7 @@ export class Session {
         style: this.style,
         density: this.density,
         looseness: this.looseness,
-        lengthBeats: this.lengthBeats,
+        lengthBeats: this.patternBeats,
         seed: base + i,
       }),
     )
@@ -988,8 +1125,9 @@ export class Session {
     const candidate = this.candidates[index]
     if (!candidate) return
     this.previewing = index
+    const before = this.heardNow()
     this.events = candidate
-    this.queueEvents()
+    this.queueEvents(before)
   }
 
   adopt() {
@@ -1000,19 +1138,35 @@ export class Session {
 
   revert() {
     if (this.beforeGenerate) {
+      const before = this.heardNow()
       this.events = this.beforeGenerate
-      this.queueEvents()
+      this.queueEvents(before)
     }
     this.adopt()
   }
 
-  private queueEvents() {
-    this.sily?.send({ type: 'queueEvents', events: this.engineEvents() })
+  private queueEvents(before: Heard, lengthBeats?: number) {
+    if (this.playing) this.heard ??= before
+    this.switchPending = this.playing
+    this.sily?.send({ type: 'queueEvents', events: this.engineEvents(), lengthBeats })
     this.fillStretched()
   }
 
+  private heardNow(): Heard {
+    return { events: this.playbackEvents(), length: this.lengthBeats }
+  }
+
+  private resetSong() {
+    this.patterns = []
+    this.currentPattern = 'A'
+    this.song = []
+    this.songMode = false
+    this.muted = Array(PADS).fill(false)
+    this.soloed = Array(PADS).fill(false)
+  }
+
   private engineEvents() {
-    return this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch }))
+    return this.playbackEvents().map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch }))
   }
 
   private sliceStart(slice: number): number | null {
@@ -1174,11 +1328,17 @@ export class Session {
 
   togglePlaying() {
     this.playing = !this.playing
+    this.heard = null
+    this.switchPending = false
     if (!this.playing) this.recording = false
     this.syncTransport()
   }
 
   toggleRecording() {
+    if (this.songMode) {
+      this.message = '曲モードでは録音できない。パターンに戻して録る'
+      return
+    }
     this.recording = !this.recording
     if (this.recording && !this.playing) {
       this.playing = true
@@ -1245,7 +1405,8 @@ export class Session {
     const { left, right } = await this.sily.renderOffline(this.snapshot(loops), loops * loopSeconds + EXPORT_TAIL_SECONDS)
     const frames = soundingLength([left, right], Math.round(loops * loopSeconds * this.sampleRate), SILENCE)
     const wav = encodeWav24(left.subarray(0, frames), right.subarray(0, frames), this.sampleRate)
-    download(new Blob([wav], { type: 'audio/wav' }), `${this.sample.name.replace(/\.[^.]+$/, '')}-${this.bpm}bpm-${loops}x.wav`)
+    const name = this.sample.name.replace(/\.[^.]+$/, '')
+    download(new Blob([wav], { type: 'audio/wav' }), this.songMode ? `${name}-${this.bpm}bpm-song.wav` : `${name}-${this.bpm}bpm-${loops}x.wav`)
   }
 
   private snapshot(loops: number): ToWorklet[] {
@@ -1261,7 +1422,7 @@ export class Session {
       { type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) },
       ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),
       { type: 'groove', grid: this.grid, strength: this.strength, swing: this.swing },
-      { type: 'events', events: this.events.map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch })) },
+      { type: 'events', events: this.engineEvents() },
       { type: 'playLimit', beats: loops * this.lengthBeats },
       { type: 'transport', bpm: this.bpm, playing: true, metronome: false, lengthBeats: this.lengthBeats },
     ]
@@ -1325,7 +1486,7 @@ export class Session {
       const own = this.own.get(pad)
       const range = this.sliceRange(pad)
       if (!p.stretch || (!own && !range)) return
-      const pitches = new Set([p.pitch, ...this.events.filter((e) => e.pad === pad).map((e) => p.pitch + e.pitch)])
+      const pitches = new Set([p.pitch, ...this.allPatterns().flatMap((pattern) => pattern.events).filter((e) => e.pad === pad).map((e) => p.pitch + e.pitch)])
       const audio = own ?? {
         left: source.left.subarray(...range!.map((f) => this.map.toEngine(f))),
         right: source.right.subarray(...range!.map((f) => this.map.toEngine(f))),
@@ -1366,6 +1527,8 @@ export class Session {
   }
 
   private syncEvents() {
+    this.heard = null
+    this.switchPending = false
     this.sily?.send({
       type: 'events',
       events: this.engineEvents(),

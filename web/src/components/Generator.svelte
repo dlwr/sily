@@ -27,7 +27,7 @@
       ヨレ
       <input type="range" min="0" max="1" step="0.05" bind:value={session.looseness} />
     </label>
-    <button class="go" onclick={() => session.generateCandidates()} disabled={!session.sample}>
+    <button class="go" onclick={() => session.generateCandidates()} disabled={!session.sample || session.songMode}>
       自動で組む <kbd>G</kbd>
     </button>
   </div>
@@ -41,7 +41,7 @@
           onclick={() => session.preview(i)}
           aria-label="候補 {i + 1}"
         >
-          <svg viewBox="0 0 {session.lengthBeats * 4} {Math.max(1, pads.length)}" preserveAspectRatio="none">
+          <svg viewBox="0 0 {session.patternBeats * 4} {Math.max(1, pads.length)}" preserveAspectRatio="none">
             {#each candidate as e}
               <rect
                 x={Math.max(0, (e.beat + e.nudge) * 4)}
