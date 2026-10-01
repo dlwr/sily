@@ -582,6 +582,14 @@ export class Session {
     this.playSlice(slice)
   }
 
+  mergeLabelingSlice() {
+    const slice = this.labelingSlice
+    if (slice === null || slice === 0 || slice >= this.markers.length) return
+    this.checkpoint()
+    this.setMarkers(this.markers.filter((_, i) => i !== slice))
+    this.showLabelingSlice(slice - 1)
+  }
+
   labelAndNext(category: Category) {
     if (this.labelingSlice === null) return
     const slice = this.labelingSlice

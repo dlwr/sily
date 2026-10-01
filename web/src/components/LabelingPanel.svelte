@@ -34,6 +34,9 @@
       <kbd>.</kbd>前と同じ{previous ? `（${CATEGORY_LABELS[previous.category]}）` : ''}
     </button>
     <button onclick={() => session.showLabelingSlice(slice + 1)} disabled={slice + 1 >= session.sliceCount}><kbd>→</kbd>飛ばす</button>
+    <button onclick={() => session.mergeLabelingSlice()} disabled={slice === 0} title="このスライスの頭のマーカーを消して前のスライスとつなげる">
+      <kbd>Backspace</kbd>前とつなげる
+    </button>
     <button onclick={() => session.stopLabeling()}><kbd>Esc</kbd>終わる</button>
   </div>
 </div>

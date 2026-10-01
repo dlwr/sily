@@ -105,6 +105,9 @@
         if (slice > 0 && previous) session.labelAndNext(previous.category)
         return
       }
+      case 'Backspace':
+        e.preventDefault()
+        return session.mergeLabelingSlice()
       case 'Escape':
         return session.stopLabeling()
     }
