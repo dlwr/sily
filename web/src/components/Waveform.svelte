@@ -82,7 +82,7 @@
     const color = (name: string) => css.getPropertyValue(name).trim()
     const mid = height / 2
 
-    const selected = session.sliceRange(session.selectedPad)
+    const selected = session.labelingSlice === null ? session.sliceRange(session.selectedPad) : session.labelingRange()
     if (selected) {
       ctx.fillStyle = color('--accent-soft')
       ctx.fillRect(xOfFrame(selected[0]), 0, xOfFrame(selected[1]) - xOfFrame(selected[0]), height)

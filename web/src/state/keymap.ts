@@ -1,3 +1,5 @@
+import type { Category } from '../classify/categories'
+
 const PAD_ROWS = [
   ['KeyZ', 'KeyX', 'KeyC', 'KeyV'],
   ['KeyA', 'KeyS', 'KeyD', 'KeyF'],
@@ -18,3 +20,22 @@ export const noteForCode = (code: string): number | undefined => {
   const index = NOTES.indexOf(code)
   return index < 0 ? undefined : index
 }
+
+export const LABEL_KEYS: [string, Category][] = [
+  ['KeyK', 'kick'],
+  ['KeyS', 'snare'],
+  ['KeyC', 'clap'],
+  ['KeyR', 'rim'],
+  ['KeyH', 'closed_hat'],
+  ['KeyO', 'open_hat'],
+  ['KeyT', 'tom'],
+  ['KeyY', 'cymbal'],
+  ['KeyE', 'perc'],
+  ['KeyB', 'bass'],
+  ['KeyJ', 'keys'],
+  ['KeyV', 'vocal'],
+  ['KeyM', 'melody'],
+  ['KeyF', 'fx'],
+]
+
+export const labelForCode = (code: string): Category | undefined => LABEL_KEYS.find(([key]) => key === code)?.[1]

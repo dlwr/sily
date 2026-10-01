@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { CATEGORY_LABELS } from '../classify/categories'
+  import { padKeyLabel } from '../state/keymap'
   import type { Session } from '../state/session.svelte'
 
   let { session }: { session: Session } = $props()
@@ -50,8 +52,12 @@
 
 <div class="pattern" oncontextmenu={(e) => e.preventDefault()} role="grid" tabindex="-1">
   {#each rows as pad}
-    <div class="row-wrap">
-      <span class="num name" class:selected={session.selectedPad === pad}>{pad + 1}</span>
+    {@const label = session.labelOf(pad)}
+    <div class="row-wrap" class:empty={!session.hasSound(pad)}>
+      <button class="name" class:selected={session.selectedPad === pad} onclick={() => (session.selectedPad = pad)}>
+        <span class="key">{padKeyLabel(pad)}</span>
+        <span class="category">{label ? CATEGORY_LABELS[label.category] : ''}</span>
+      </button>
       <div
         class="row"
         style:--steps={steps}
@@ -83,7 +89,7 @@
       </div>
     </div>
   {/each}
-  <div class="playhead" style:left="calc(28px + (100% - 28px) * {session.beat / session.lengthBeats})"></div>
+  <div class="playhead" style:left="calc(var(--name-width) + (100% - var(--name-width)) * {session.beat / session.lengthBeats})"></div>
 </div>
 <div class="footer">
   <span class="muted">枠だけのノートは自動で組んだもの（点線は、足りない役を近い音で代役させたもの） / 空いたマスをクリックで置く / ノートはドラッグでずらす・ホイールで音程・Alt+ホイールで強さ / 右クリックで削除</span>
@@ -100,6 +106,7 @@
 
 <style>
   .pattern {
+    --name-width: 84px;
     position: relative;
     display: flex;
     flex-direction: column;
@@ -113,15 +120,38 @@
     height: 18px;
   }
 
+  .row-wrap.empty {
+    opacity: 0.4;
+  }
+
   .name {
-    width: 28px;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    width: var(--name-width);
+    height: 100%;
+    padding: 0 4px 0 0;
+    background: none;
+    border: none;
     font-size: 11px;
     color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .name .key {
+    width: 12px;
+    font-weight: 700;
+  }
+
+  .name .category {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .name.selected {
     color: var(--accent);
-    font-weight: 700;
   }
 
   .row {
