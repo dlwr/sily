@@ -20,6 +20,7 @@ import { untrack } from 'svelte'
 import { generate, type PadInfo, type Style } from '../generate/generate'
 import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
+import { uploadCorrection } from '../corrections/upload'
 import { changeVelocity, nudgeEvent, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
@@ -111,6 +112,7 @@ export class Session {
   padSlices = $state<number[]>(identity())
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
+  correctionLogin = $state(false)
   style = $state<Style>('boom_bap')
   density = $state(0.5)
   looseness = $state(0.5)
@@ -140,6 +142,8 @@ export class Session {
   private engineSample: { left: Float32Array; right: Float32Array } | null = null
   private loadedStretch: number | null = null
   private features = new Map<number, number[]>()
+  private unsentCorrections: { wav: ArrayBuffer; label: Category }[] = []
+  private sendingCorrections = false
   private classifyTimer: ReturnType<typeof setTimeout> | undefined
   private sourceToken = 0
   private loadToken = 0
@@ -161,7 +165,6 @@ export class Session {
 
   async start() {
     if (this.sily) return
-    if (this.correctionCount > 0) pushCorrections(readCorrections())
     const sily = await Sily.create()
     sily.onTick = (t) => {
       this.beat = t.beat
@@ -545,9 +548,35 @@ export class Session {
     if (features) {
       const corrections = [...readCorrections(), { features, label: category }]
       writeCorrections(corrections)
-      pushCorrections(corrections)
       this.correctionCount = corrections.length
     }
+    this.sendCorrection(this.padSlices[pad], category)
+  }
+
+  async flushCorrections() {
+    if (this.sendingCorrections) return
+    this.sendingCorrections = true
+    while (this.unsentCorrections.length > 0) {
+      const { wav, label } = this.unsentCorrections[0]
+      const result = await uploadCorrection(wav, label)
+      if (result === 'login') {
+        this.correctionLogin = true
+        break
+      }
+      this.unsentCorrections.shift()
+      if (result === 'saved') this.correctionLogin = false
+      else this.message = '直したラベルを送れなかった'
+    }
+    this.sendingCorrections = false
+  }
+
+  private sendCorrection(slice: number, label: Category) {
+    const start = this.sliceStart(slice)
+    if (start === null || !this.sample) return
+    const end = this.markers[slice + 1] ?? this.sample.left.length
+    const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
+    this.unsentCorrections.push({ wav, label })
+    void this.flushCorrections()
   }
 
   exportCorrections() {
@@ -1275,11 +1304,6 @@ function writeCorrections(corrections: Correction[]) {
   } catch {
     return
   }
-}
-
-function pushCorrections(corrections: Correction[]) {
-  if (!import.meta.env.DEV) return
-  fetch('/__sily/corrections', { method: 'POST', body: JSON.stringify(corrections) }).catch(() => {})
 }
 
 function download(blob: Blob, name: string) {

@@ -104,6 +104,9 @@
   <button onclick={() => session.exportCorrections()} disabled={session.correctionCount === 0}>
     直したラベルを書き出す（{session.correctionCount}）
   </button>
+  {#if session.correctionLogin}
+    <a href="/api/corrections/login" target="_blank" rel="noopener">直したラベルを送るにはログイン</a>
+  {/if}
   <button aria-pressed={session.keyboardMode} onclick={() => (session.keyboardMode = !session.keyboardMode)}>
     鍵盤モード <kbd>Tab</kbd>
   </button>
