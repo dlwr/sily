@@ -24,6 +24,7 @@ FEATURES_BIN = ROOT / "target" / "release" / "features"
 MODEL_OUT = ROOT / "web" / "src" / "classify" / "model.json"
 CORRECTIONS = ROOT / "tmp" / "train" / "corrections"
 AUDIO = {".wav", ".mp3", ".ogg", ".flac", ".aif", ".aiff"}
+UPPER_KINDS = {"keys", "vocal", "melody", "fx"}
 
 
 def features(paths: list[pathlib.Path]) -> dict[str, list[float]]:
@@ -41,8 +42,12 @@ def features(paths: list[pathlib.Path]) -> dict[str, list[float]]:
     return rows
 
 
+def tree_class(label: str) -> str:
+    return "upper" if label in UPPER_KINDS else label
+
+
 def load_folders(roots: list[pathlib.Path]) -> tuple[list[list[float]], list[str]]:
-    labelled = [(p, p.parent.name) for root in roots for p in root.glob("*/*") if p.suffix.lower() in AUDIO]
+    labelled = [(p, tree_class(p.parent.name)) for root in roots for p in root.glob("*/*") if p.suffix.lower() in AUDIO]
     rows = features([p for p, _ in labelled])
     xs, ys = [], []
     for path, label in labelled:
