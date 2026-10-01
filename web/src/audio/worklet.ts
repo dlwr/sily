@@ -95,7 +95,8 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'queueEvents':
         w.engine_queue_clear()
         for (const e of msg.events) w.engine_queue_add(e.beat, e.pad, e.velocity, e.nudge, e.pitch)
-        w.engine_queue_commit()
+        if (msg.lengthBeats === undefined) w.engine_queue_commit()
+        else w.engine_queue_commit_pattern(msg.lengthBeats)
         break
       case 'record':
         this.post({

@@ -62,7 +62,7 @@ pub struct Engine {
     pads: Vec<Pad>,
     voices: [Voice; VOICES],
     pattern: Pattern,
-    queued: Option<Vec<Event>>,
+    queued: Option<(Vec<Event>, Option<f64>)>,
     bpm: f64,
     playing: bool,
     beat: f64,
@@ -207,8 +207,8 @@ impl Engine {
 
     pub fn set_playing(&mut self, playing: bool) {
         if !playing {
-            if let Some(events) = self.queued.take() {
-                self.replace_events(events);
+            if let Some(queued) = self.queued.take() {
+                self.apply_queued(queued);
             }
         }
         if playing && !self.playing {
@@ -247,11 +247,26 @@ impl Engine {
     }
 
     pub fn queue_events(&mut self, events: Vec<Event>) {
+        self.queue(events, None);
+    }
+
+    pub fn queue_pattern(&mut self, events: Vec<Event>, length_beats: f64) {
+        self.queue(events, Some(length_beats));
+    }
+
+    fn queue(&mut self, events: Vec<Event>, length_beats: Option<f64>) {
         if self.playing {
-            self.queued = Some(events);
+            self.queued = Some((events, length_beats));
         } else {
-            self.replace_events(events);
+            self.apply_queued((events, length_beats));
         }
+    }
+
+    fn apply_queued(&mut self, (events, length_beats): (Vec<Event>, Option<f64>)) {
+        if let Some(length) = length_beats {
+            self.set_pattern_length(length);
+        }
+        self.replace_events(events);
     }
 
     pub fn set_events(&mut self, events: Vec<Event>) {
@@ -308,9 +323,11 @@ impl Engine {
                     pending.push((frame_offset(offset, beats_per_frame, frames), *e));
                 }
             });
+            let mut carried = None;
             if wraps {
-                if let Some(events) = self.queued.take() {
-                    self.replace_events(events);
+                if let Some(queued) = self.queued.take() {
+                    self.apply_queued(queued);
+                    carried = Some(span - head);
                     let pending = &mut self.pending;
                     self.pattern.for_each_in_span(0.0, audible_span - head, |offset, e| {
                         if pending.len() < pending.capacity() {
@@ -329,7 +346,7 @@ impl Engine {
                     n += 1;
                 }
             }
-            self.beat = (self.beat + span).rem_euclid(self.pattern.length_beats());
+            self.beat = carried.unwrap_or(self.beat + span).rem_euclid(self.pattern.length_beats());
             self.played += span;
             if self.play_limit.is_some_and(|limit| self.played >= limit) {
                 self.playing = false;
@@ -983,6 +1000,30 @@ mod tests {
         let out = render(&mut e, 1400);
         let heard: Vec<usize> = [300, 800, 1300].iter().filter_map(|&from| first_sound(&out[from..from + 100]).map(|i| i + from)).collect();
         assert_eq!(heard, vec![1300]);
+    }
+
+    #[test]
+    fn a_queued_pattern_brings_its_own_length() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.set_playing(true);
+        render(&mut e, 200);
+        e.queue_pattern(vec![at(1.5, 0)], 2.0);
+        let out = render(&mut e, 2400);
+        assert_eq!(first_sound(&out), Some(2300));
+    }
+
+    #[test]
+    fn the_beat_carries_on_into_a_longer_queued_pattern() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.set_pattern_length(1.0);
+        e.set_playing(true);
+        render(&mut e, 200);
+        e.queue_pattern(vec![], 4.0);
+        render(&mut e, 2000);
+        assert!((e.beat() - 1.2).abs() < 0.01);
     }
 
     #[test]

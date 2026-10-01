@@ -37,7 +37,7 @@
   <label class="group">
     長さ
     <select value={session.bars} onchange={(e) => session.setTransport({ bars: Number(e.currentTarget.value) })}>
-      {#each [1, 2, 4] as bars}<option value={bars}>{bars}小節</option>{/each}
+      {#each [1, 2, 4, 8] as bars}<option value={bars}>{bars}小節</option>{/each}
     </select>
   </label>
   <label class="group">

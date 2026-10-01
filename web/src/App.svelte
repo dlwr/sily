@@ -5,6 +5,7 @@
   import Pads from './components/Pads.svelte'
   import PatternGrid from './components/PatternGrid.svelte'
   import SliceTools from './components/SliceTools.svelte'
+  import SongBar from './components/SongBar.svelte'
   import SourceSpeed from './components/SourceSpeed.svelte'
   import Transport from './components/Transport.svelte'
   import Waveform from './components/Waveform.svelte'
@@ -156,6 +157,7 @@
       </div>
       <div class="pattern-area">
         <Generator {session} />
+        <SongBar {session} />
         <PatternGrid {session} />
       </div>
     </section>
