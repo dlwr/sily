@@ -296,6 +296,12 @@ pub extern "C" fn engine_queue_commit() {
 
 #[no_mangle]
 #[allow(static_mut_refs)]
+pub extern "C" fn engine_queue_commit_pattern(length_beats: f64) {
+    engine().queue_pattern(unsafe { std::mem::take(&mut QUEUE) }, length_beats);
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
 pub extern "C" fn result_scores() -> *const f32 {
     unsafe { RESULT_SCORES.as_ptr() }
 }
