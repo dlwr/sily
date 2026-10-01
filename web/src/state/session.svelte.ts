@@ -413,7 +413,9 @@ export class Session {
     const token = ++this.loadToken
     try {
       const { left, right } = await this.sily.decode(file)
-      if (token === this.loadToken) this.setSample(file.name, left, right)
+      if (token !== this.loadToken) return
+      this.setSample(file.name, left, right)
+      this.sliceByOnsets()
     } catch {
       this.message = `${file.name} を読み込めなかった`
     }
@@ -474,7 +476,10 @@ export class Session {
     const { left, right } = this.capture.stop()
     this.capture = null
     this.capturing = null
-    if (left.length > 0) this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
+    if (left.length > 0) {
+      this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
+      this.sliceByOnsets()
+    }
   }
 
   toggleAudition(from = 0) {
@@ -1027,6 +1032,11 @@ export class Session {
   detectOnsets() {
     if (!this.sily || !this.sample) return
     this.checkpoint()
+    this.sliceByOnsets()
+  }
+
+  private sliceByOnsets() {
+    if (!this.sily || !this.sample) return
     this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, MAX_CLASSIFIED), true)
   }
 
