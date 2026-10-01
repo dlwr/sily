@@ -41,7 +41,7 @@ pnpm dev
 echo "FREESOUND_API_KEY=..." > .env
 uv run tools/train/fetch.py --per-class 300
 cargo build -p sily-tools --release
-uv run tools/train/train.py tmp/train/freesound --corrections ~/Downloads/sily-corrections.json
+uv run tools/train/train.py tmp/train/freesound
 ```
 
-`--corrections` には、アプリの「直したラベルを書き出す」で保存した JSON を渡せる。
+`pnpm dev` でラベルを直すと、その都度 `tmp/corrections.json` に保存され、学習時に自動で読み込まれる。本番で直したものは「直したラベルを書き出す」で保存し、`--corrections` に渡す。
