@@ -55,7 +55,7 @@ uv run tools/train/probe.py tmp/train/freesound
 
 ラベルを直すと、そのスライスの音声が送られる。`pnpm dev` では `tmp/train/corrections/<ラベル>/` に直接保存され、本番では D1 と R2 に溜まる（書き込みは Cloudflare Access でログインした本人だけ）。`pull.py` は本番の分を同じフォルダに取ってくる。`train.py` はこのフォルダがあれば自動で学習に含める。
 
-録音5本に1本は評価用に取り分けられ、そのスライスは `tmp/train/eval/<ラベル>/` に入る（`split` を記録する前に送られた分は学習用）。`train.py` と `probe.py` はここを学習に使わず、学習後にこの上での精度を出す。`probe.py` は実際の録音から切った音を `--real-weight` 倍（既定 10）の重みで学習する。
+録音5本に1本は評価用に取り分けられ（ラベル付けの画面の「この録音を評価用にする」で、狙った録音を評価用にもできる）、そのスライスは `tmp/train/eval/<ラベル>/` に入る（`split` を記録する前に送られた分は学習用）。`train.py` と `probe.py` はここを学習に使わず、学習後にこの上での精度を出す。`probe.py` は実際の録音から切った音を `--real-weight` 倍（既定 10）の重みで学習する。
 
 手持ちのドラム音源からも集められる。`render.py midi` が GM のドラムを1発ずつ鳴らす MIDI を作るので、DAW のテンポを 120 にして音源に鳴らし、小節1の頭から WAV に書き出し、`render.py split` で切ると `tmp/train/render/<ラベル>/` に入り、これも学習に含まれる。
 
