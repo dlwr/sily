@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickLabel, resample } from './clap'
+import { CLAP_RATE, clipForClap, MAX_CLIP_SECONDS, normalize, resample } from './clap'
 
 describe('resample', () => {
   it('keeps the signal at the same rate', () => {
@@ -15,19 +15,22 @@ describe('resample', () => {
   })
 })
 
-describe('pickLabel', () => {
-  const labels = { bass: [[1, 0, 0]], keys: [[0, 1, 0]], fx: [[0, 0, 1]] }
-
-  it('picks the closest label embedding', () => {
-    expect(pickLabel([0.1, 0.9, 0.2], labels).category).toBe('keys')
+describe('clipForClap', () => {
+  it('brings the slice to the rate CLAP expects', () => {
+    expect(clipForClap(new Float32Array(44100), 44100).length).toBe(CLAP_RATE)
   })
 
-  it('uses the best prompt of each label', () => {
-    expect(pickLabel([0.6, 0.1, 0.5], { ...labels, fx: [[0, 0, 1], [0.8, 0, 0.6]] }).category).toBe('fx')
+  it('keeps only the head of a long slice', () => {
+    expect(clipForClap(new Float32Array(44100 * 20), 44100).length).toBe(CLAP_RATE * MAX_CLIP_SECONDS)
+  })
+})
+
+describe('normalize', () => {
+  it('scales the embedding to unit length', () => {
+    expect(normalize([3, 4])).toEqual([0.6, 0.8])
   })
 
-  it('reports a confidence between zero and one', () => {
-    const { confidence } = pickLabel([0.1, 0.9, 0.2], labels)
-    expect(confidence > 0 && confidence <= 1).toBe(true)
+  it('leaves a zero embedding alone', () => {
+    expect(normalize([0, 0])).toEqual([0, 0])
   })
 })

@@ -38,15 +38,18 @@ pnpm dev
 
 ## 分類器の学習
 
-スライスの役割（kick / snare / closed_hat / open_hat / perc / bass / upper の7つ）は、学習済みモデル（`web/src/classify/model.json`）があればそれで、なければルールで判定する。
+スライスの役割（kick / snare / closed_hat / open_hat / perc / bass / upper の7つ）は、まず Rust の特徴量のモデル（`web/src/classify/model.json`）で仮に判定し、裏で CLAP の音声埋め込みにロジスティック回帰をかけたもの（`web/src/classify/probe.json`）で置き換える。CLAP は WebGPU があれば fp16、なければ WASM の q8 で動かす。
 
 ```sh
 echo "FREESOUND_API_KEY=..." > .env
 uv run tools/train/fetch.py --per-class 300
 cargo build -p sily-tools --release
 uv run tools/train/pull.py
-uv run tools/train/train.py tmp/train/freesound
+uv run tools/train/train.py tmp/train/freesound --include-eval
+uv run tools/train/probe.py tmp/train/freesound --include-eval
 ```
+
+`probe.py` の埋め込みはブラウザと同じ transformers.js のモデルを Node で動かして取る（`web/scripts/embed-audio.ts`、ffmpeg が要る）。結果は `tmp/train/clap-cache-fp32.jsonl` にキャッシュされる。
 
 ラベルを直すと、そのスライスの音声が送られる。`pnpm dev` では `tmp/train/corrections/<ラベル>/` に直接保存され、本番では D1 と R2 に溜まる（書き込みは Cloudflare Access でログインした本人だけ）。`pull.py` は本番の分を同じフォルダに取ってくる。`train.py` はこのフォルダがあれば自動で学習に含める。
 

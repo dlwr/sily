@@ -7,11 +7,18 @@ if (env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = 1
 
 let loading: Promise<[Processor, ClapAudioModelWithProjection]> | null = null
 
-const load = () =>
-  (loading ??= Promise.all([
-    AutoProcessor.from_pretrained(MODEL),
-    ClapAudioModelWithProjection.from_pretrained(MODEL, { dtype: 'q8' }),
-  ]))
+const loadModel = async () => {
+  if ('gpu' in navigator) {
+    try {
+      return await ClapAudioModelWithProjection.from_pretrained(MODEL, { dtype: 'fp16', device: 'webgpu' })
+    } catch (error) {
+      console.warn('CLAP on WebGPU failed, falling back to WASM', error)
+    }
+  }
+  return ClapAudioModelWithProjection.from_pretrained(MODEL, { dtype: 'q8' })
+}
+
+const load = () => (loading ??= Promise.all([AutoProcessor.from_pretrained(MODEL), loadModel()]))
 
 self.onmessage = async (e: MessageEvent<{ id: number; payload: { audio: Float32Array } }>) => {
   try {
