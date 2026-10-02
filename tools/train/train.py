@@ -7,6 +7,9 @@
 特徴量は Rust の CLI（sily-tools の features）で計算するので、推論と同じ値になる。
     cargo build -p sily-tools --release
     uv run tools/train/train.py tmp/train/freesound
+
+ラベルは生成器が使う役割（kick / snare / closed_hat / open_hat / perc / bass / upper）にまとめて学習する。
+tmp/train/eval/ にある音は学習に使わず、評価だけに使う。
 """
 
 import argparse
@@ -23,8 +26,18 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 FEATURES_BIN = ROOT / "target" / "release" / "features"
 MODEL_OUT = ROOT / "web" / "src" / "classify" / "model.json"
 EXTRA_FOLDERS = [ROOT / "tmp" / "train" / "corrections", ROOT / "tmp" / "train" / "render"]
+EVAL_FOLDER = ROOT / "tmp" / "train" / "eval"
 AUDIO = {".wav", ".mp3", ".ogg", ".flac", ".aif", ".aiff"}
-UPPER_KINDS = {"keys", "vocal", "melody", "fx"}
+ROLES = {
+    "clap": "snare",
+    "rim": "snare",
+    "cymbal": "open_hat",
+    "tom": "perc",
+    "keys": "upper",
+    "vocal": "upper",
+    "melody": "upper",
+    "fx": "upper",
+}
 
 
 def features(paths: list[pathlib.Path]) -> dict[str, list[float]]:
@@ -42,12 +55,12 @@ def features(paths: list[pathlib.Path]) -> dict[str, list[float]]:
     return rows
 
 
-def tree_class(label: str) -> str:
-    return "upper" if label in UPPER_KINDS else label
+def role(label: str) -> str:
+    return ROLES.get(label, label)
 
 
 def load_folders(roots: list[pathlib.Path]) -> tuple[list[list[float]], list[str]]:
-    labelled = [(p, tree_class(p.parent.name)) for root in roots for p in root.glob("*/*") if p.suffix.lower() in AUDIO]
+    labelled = [(p, role(p.parent.name)) for root in roots for p in root.glob("*/*") if p.suffix.lower() in AUDIO]
     rows = features([p for p, _ in labelled])
     xs, ys = [], []
     for path, label in labelled:
@@ -62,7 +75,7 @@ def load_corrections(files: list[pathlib.Path]) -> tuple[list[list[float]], list
     for f in files:
         for row in json.loads(f.read_text()):
             xs.append(row["features"])
-            ys.append(row["label"])
+            ys.append(role(row["label"]))
     return xs, ys
 
 
@@ -75,6 +88,8 @@ def main() -> None:
 
     given = [f.resolve() for f in args.folders]
     args.folders += [f for f in EXTRA_FOLDERS if f.exists() and f.resolve() not in given]
+    if EVAL_FOLDER.resolve() in [f.resolve() for f in args.folders]:
+        raise SystemExit(f"{EVAL_FOLDER} は評価用なので学習に使わない")
     xs, ys = load_folders(args.folders)
     cx, cy = load_corrections(args.corrections)
     width = len(xs[0]) if xs else 0
@@ -92,6 +107,11 @@ def main() -> None:
         predicted = cross_val_predict(model, x, y, cv=folds)
         print(classification_report(y, predicted, zero_division=0))
     model.fit(x, y)
+    if EVAL_FOLDER.exists():
+        ex, ey = load_folders([EVAL_FOLDER])
+        if ex:
+            print(f"held-out recordings ({len(ey)} slices):")
+            print(classification_report(ey, model.predict(np.array(ex, dtype=np.float64)), zero_division=0))
 
     exported = export(model)
     agreement = (np.array(exported["classes"])[evaluate(exported, x).argmax(axis=1)] == model.predict(x)).mean()
