@@ -40,7 +40,11 @@
     <button onclick={() => session.setSourceSpeed({ rate: p.rate })} disabled={!session.sample}>{p.label}</button>
   {/each}
   <button onclick={() => session.matchBpm(speed.mode)} disabled={!session.sample}>BPM に合わせる</button>
-  {#if session.sourceBpm}<span class="muted num">元の BPM {session.sourceBpm}</span>{/if}
+  {#if session.sourceBpm}
+    <span class="muted num">元の BPM {session.sourceBpm}</span>
+    <button onclick={() => session.scaleSourceBpm(2)} title="推定が半分にずれていたら直す。切り直してキットを組み直す">×2</button>
+    <button onclick={() => session.scaleSourceBpm(0.5)} title="推定が倍にずれていたら直す。切り直してキットを組み直す">÷2</button>
+  {/if}
 </div>
 
 <style>
