@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ROLES } from '../classify/categories'
 import { LABEL_KEYS, labelForCode, noteForCode, padForCode } from './keymap'
 
 describe('padForCode', () => {
@@ -40,6 +41,14 @@ describe('labelForCode', () => {
 
   it('ignores keys without a label', () => {
     expect(labelForCode('KeyZ')).toBeUndefined()
+  })
+
+  it('maps U to upper', () => {
+    expect(labelForCode('KeyU')).toBe('upper')
+  })
+
+  it('offers one key for each role', () => {
+    expect(LABEL_KEYS.map(([, label]) => label).sort()).toEqual([...ROLES].sort())
   })
 
   it('gives every key its own label', () => {

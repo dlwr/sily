@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrangePads, remapEvents } from './categories'
+import { arrangePads, remapEvents, roleOf } from './categories'
 
 describe('arrangePads', () => {
   it('puts kicks first, then snares, then hats like an MPC kit', () => {
@@ -26,5 +26,27 @@ describe('remapEvents', () => {
 
   it('leaves events on pads outside the mapping alone', () => {
     expect(remapEvents([{ pad: 9 }], [0, 1], [1, 0])[0].pad).toBe(9)
+  })
+})
+
+describe('roleOf', () => {
+  it('keeps a role as it is', () => {
+    expect(roleOf('kick')).toBe('kick')
+  })
+
+  it('folds clap and rim into snare', () => {
+    expect([roleOf('clap'), roleOf('rim')]).toEqual(['snare', 'snare'])
+  })
+
+  it('folds cymbal into open hat', () => {
+    expect(roleOf('cymbal')).toBe('open_hat')
+  })
+
+  it('folds tom into perc', () => {
+    expect(roleOf('tom')).toBe('perc')
+  })
+
+  it('folds the upper kinds into upper', () => {
+    expect(['keys', 'vocal', 'melody', 'fx'].map((c) => roleOf(c as never))).toEqual(['upper', 'upper', 'upper', 'upper'])
   })
 })

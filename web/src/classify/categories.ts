@@ -18,6 +18,23 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number]
 
+export const ROLES = ['kick', 'snare', 'closed_hat', 'open_hat', 'perc', 'bass', 'upper'] as const satisfies readonly Category[]
+
+export type Role = (typeof ROLES)[number]
+
+const FOLDED: Partial<Record<Category, Role>> = {
+  clap: 'snare',
+  rim: 'snare',
+  cymbal: 'open_hat',
+  tom: 'perc',
+  keys: 'upper',
+  vocal: 'upper',
+  melody: 'upper',
+  fx: 'upper',
+}
+
+export const roleOf = (category: Category): Role => FOLDED[category] ?? (category as Role)
+
 export const CATEGORY_LABELS: Record<Category, string> = {
   kick: 'キック',
   snare: 'スネア',
