@@ -1377,6 +1377,17 @@ export class Session {
     this.playWhenBuilt = true
   }
 
+  scaleSourceBpm(factor: number) {
+    if (!this.sample || !this.sourceBpm) return
+    this.checkpoint()
+    this.sourceBpm = Math.round(this.sourceBpm * factor * 10) / 10
+    this.bpm = Math.round(this.sourceBpm * this.sourceSpeed.rate * 10) / 10
+    this.syncTransport()
+    this.sliceByOnsets()
+    this.kitPending = true
+    this.playWhenBuilt = true
+  }
+
   private finishBuild() {
     if (!this.playWhenBuilt) return
     this.playWhenBuilt = false
