@@ -21,6 +21,8 @@ import { generate, type PadInfo, type Style } from '../generate/generate'
 import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { uploadCorrection } from '../corrections/upload'
+import { sha256Hex } from '../corrections/hash'
+import { splitFor, type Split } from '../corrections/split'
 import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
@@ -157,7 +159,8 @@ export class Session {
   private engineSample: { left: Float32Array; right: Float32Array } | null = null
   private loadedStretch: number | null = null
   private features = new Map<number, number[]>()
-  private unsentCorrections: { wav: ArrayBuffer; label: Category }[] = []
+  private unsentCorrections: { wav: ArrayBuffer; label: Category; split: Promise<Split> }[] = []
+  private splits = new WeakMap<Sample, Promise<Split>>()
   private sendingCorrections = false
   private tickBeat: number | null = null
   private heard: Heard | null = null
@@ -762,8 +765,8 @@ export class Session {
     if (this.sendingCorrections) return
     this.sendingCorrections = true
     while (this.unsentCorrections.length > 0) {
-      const { wav, label } = this.unsentCorrections[0]
-      const result = await uploadCorrection(wav, label)
+      const { wav, label, split } = this.unsentCorrections[0]
+      const result = await uploadCorrection(wav, label, await split)
       if (result === 'login') {
         this.correctionLogin = true
         break
@@ -783,9 +786,19 @@ export class Session {
     if (start === null || !this.sample) return
     const end = this.markers[slice + 1] ?? this.sample.left.length
     const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
-    this.unsentCorrections.push({ wav, label })
+    this.unsentCorrections.push({ wav, label, split: this.splitOf(this.sample) })
     this.correctionsUnsent = this.unsentCorrections.length
     void this.flushCorrections()
+  }
+
+  private splitOf(sample: Sample): Promise<Split> {
+    let split = this.splits.get(sample)
+    if (!split) {
+      const left = sample.left
+      split = sha256Hex(left.buffer.slice(left.byteOffset, left.byteOffset + left.byteLength) as ArrayBuffer).then(splitFor)
+      this.splits.set(sample, split)
+    }
+    return split
   }
 
   exportCorrections() {

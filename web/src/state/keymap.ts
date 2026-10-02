@@ -1,4 +1,4 @@
-import type { Category } from '../classify/categories'
+import type { Role } from '../classify/categories'
 
 const PAD_ROWS = [
   ['KeyZ', 'KeyX', 'KeyC', 'KeyV'],
@@ -21,21 +21,14 @@ export const noteForCode = (code: string): number | undefined => {
   return index < 0 ? undefined : index
 }
 
-export const LABEL_KEYS: [string, Category][] = [
+export const LABEL_KEYS: [string, Role][] = [
   ['KeyK', 'kick'],
   ['KeyS', 'snare'],
-  ['KeyC', 'clap'],
-  ['KeyR', 'rim'],
   ['KeyH', 'closed_hat'],
   ['KeyO', 'open_hat'],
-  ['KeyT', 'tom'],
-  ['KeyY', 'cymbal'],
   ['KeyE', 'perc'],
   ['KeyB', 'bass'],
-  ['KeyJ', 'keys'],
-  ['KeyV', 'vocal'],
-  ['KeyM', 'melody'],
-  ['KeyF', 'fx'],
+  ['KeyU', 'upper'],
 ]
 
-export const labelForCode = (code: string): Category | undefined => LABEL_KEYS.find(([key]) => key === code)?.[1]
+export const labelForCode = (code: string): Role | undefined => LABEL_KEYS.find(([key]) => key === code)?.[1]

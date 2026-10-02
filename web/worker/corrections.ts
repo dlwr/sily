@@ -1,10 +1,12 @@
 import { CATEGORIES } from '../src/classify/categories.ts'
 import { sha256Hex } from '../src/corrections/hash.ts'
+import { SPLITS, type Split } from '../src/corrections/split.ts'
 
-export type CorrectionStore = { save(id: string, label: string, audio: ArrayBuffer): Promise<void> }
+export type CorrectionStore = { save(id: string, label: string, split: Split, audio: ArrayBuffer): Promise<void> }
 
 const MAX_BYTES = 16 * 1024 * 1024
 const isCategory = (label: string | null) => (CATEGORIES as readonly (string | null)[]).includes(label)
+const isSplit = (split: string | null): split is Split => (SPLITS as readonly (string | null)[]).includes(split)
 
 export async function handleCorrections(request: Request, store: CorrectionStore): Promise<Response> {
   const { pathname, searchParams } = new URL(request.url)
@@ -14,10 +16,11 @@ export async function handleCorrections(request: Request, store: CorrectionStore
   if (!id) return new Response(null, { status: 404 })
   if (request.method !== 'PUT') return new Response(null, { status: 405 })
   const label = searchParams.get('label')
-  if (!isCategory(label)) return new Response(null, { status: 400 })
+  const split = searchParams.get('split')
+  if (!isCategory(label) || !isSplit(split)) return new Response(null, { status: 400 })
   if (Number(request.headers.get('content-length') ?? 0) > MAX_BYTES) return new Response(null, { status: 413 })
   const audio = await request.arrayBuffer()
   if (audio.byteLength === 0 || audio.byteLength > MAX_BYTES || (await sha256Hex(audio)) !== id) return new Response(null, { status: 400 })
-  await store.save(id, label!, audio)
+  await store.save(id, label!, split, audio)
   return new Response(null, { status: 204 })
 }

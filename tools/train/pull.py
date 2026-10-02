@@ -3,6 +3,8 @@
 # ///
 """本番で直したラベルの音声を D1 / R2 から tmp/train/corrections/<ラベル>/ に取ってくる。
 
+評価用に取り分けた録音のもの（split が eval か、split を記録する前のもの）は tmp/train/eval/<ラベル>/ に入れる。
+
     uv run tools/train/pull.py
 """
 
@@ -11,7 +13,8 @@ import pathlib
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-OUT = ROOT / "tmp" / "train" / "corrections"
+TRAIN = ROOT / "tmp" / "train" / "corrections"
+EVAL = ROOT / "tmp" / "train" / "eval"
 BUCKET = "sily-corrections"
 
 
@@ -23,12 +26,12 @@ def wrangler(*args: str) -> str:
 
 
 def main() -> None:
-    rows = json.loads(wrangler("d1", "execute", "sily", "--remote", "--json", "--command", "SELECT id, label FROM corrections"))[0]["results"]
+    rows = json.loads(wrangler("d1", "execute", "sily", "--remote", "--json", "--command", "SELECT id, label, split FROM corrections"))[0]["results"]
     fetched = 0
     for row in rows:
         name = f"{row['id']}.wav"
-        dest = OUT / row["label"] / name
-        for stale in OUT.glob(f"*/{name}"):
+        dest = (TRAIN if row["split"] == "train" else EVAL) / row["label"] / name
+        for stale in [*TRAIN.glob(f"*/{name}"), *EVAL.glob(f"*/{name}")]:
             if stale != dest:
                 stale.unlink()
         if dest.exists():
