@@ -9,7 +9,7 @@
     uv run tools/train/train.py tmp/train/freesound
 
 ラベルは生成器が使う役割（kick / snare / closed_hat / open_hat / perc / bass / upper）にまとめて学習する。
-tmp/train/eval/ にある音は学習に使わず、評価だけに使う。
+tmp/train/eval/ にある音は学習に使わず、評価だけに使う。--include-eval を付けると、精度を出したあと評価用も含めて学習し直して書き出す。
 """
 
 import argparse
@@ -83,6 +83,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("folders", nargs="+", type=pathlib.Path)
     parser.add_argument("--corrections", nargs="*", type=pathlib.Path, default=[])
+    parser.add_argument("--include-eval", action="store_true")
     parser.add_argument("--out", type=pathlib.Path, default=MODEL_OUT)
     args = parser.parse_args()
 
@@ -112,6 +113,10 @@ def main() -> None:
         if ex:
             print(f"held-out recordings ({len(ey)} slices):")
             print(classification_report(ey, model.predict(np.array(ex, dtype=np.float64)), zero_division=0))
+            if args.include_eval:
+                x = np.concatenate([x, np.array(ex, dtype=np.float64)])
+                y = np.concatenate([y, np.array(ey)])
+                model.fit(x, y)
 
     exported = export(model)
     agreement = (np.array(exported["classes"])[evaluate(exported, x).argmax(axis=1)] == model.predict(x)).mean()
