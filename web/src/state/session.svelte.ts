@@ -865,6 +865,7 @@ export class Session {
     free.forEach((pad, i) => (after[pad] = picks[i]))
     this.events = dropUnplacedEvents(this.events, this.padSlices, after)
     this.applyPadSlices(after)
+    this.sendMarkers()
     void this.placePhrases()
   }
 
