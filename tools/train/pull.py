@@ -3,7 +3,7 @@
 # ///
 """本番で直したラベルの音声を D1 / R2 から tmp/train/corrections/<ラベル>/ に取ってくる。
 
-評価用に取り分けた録音のもの（split が eval か、split を記録する前のもの）は tmp/train/eval/<ラベル>/ に入れる。
+評価用に取り分けた録音のもの（split が eval のもの）は tmp/train/eval/<ラベル>/ に入れる。
 
     uv run tools/train/pull.py
 """
@@ -30,7 +30,7 @@ def main() -> None:
     fetched = 0
     for row in rows:
         name = f"{row['id']}.wav"
-        dest = (TRAIN if row["split"] == "train" else EVAL) / row["label"] / name
+        dest = (EVAL if row["split"] == "eval" else TRAIN) / row["label"] / name
         for stale in [*TRAIN.glob(f"*/{name}"), *EVAL.glob(f"*/{name}")]:
             if stale != dest:
                 stale.unlink()
