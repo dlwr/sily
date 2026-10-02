@@ -32,6 +32,7 @@ export type SilyExports = {
   stretch(left: number, right: number, frames: number, sampleRate: number, ratio: number): number
   result_audio(channel: number): number
   engine_set_pad_slice(pad: number, slice: number): void
+  engine_set_pad_span(pad: number, start: number, end: number): void
   engine_set_choke_group(pad: number, group: number): void
   engine_set_pad_sample(pad: number, left: number, right: number, frames: number): void
   engine_set_pad_fx(pad: number, hp: number, lp: number, low: number, mid: number, midHz: number, high: number, drive: number, ceiling: number): void

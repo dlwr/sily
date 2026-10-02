@@ -213,6 +213,11 @@ pub extern "C" fn engine_set_pad_slice(pad: u32, slice: u32) {
     engine().set_pad_slice(pad as usize, slice as usize);
 }
 
+#[no_mangle]
+pub extern "C" fn engine_set_pad_span(pad: u32, start: u32, end: u32) {
+    engine().set_pad_span(pad as usize, (end > start).then_some(start as usize..end as usize));
+}
+
 const CATEGORIES: [Category; 15] = [
     Category::Kick,
     Category::Snare,
