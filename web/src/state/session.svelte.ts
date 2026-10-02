@@ -874,7 +874,8 @@ export class Session {
 
   private async placePhrases() {
     const sample = this.sample
-    if (!sample) return
+    const sily = this.sily
+    if (!sample || !sily) return
     const bpm = this.sourceBpm ?? this.estimateSourceBpm()
     if (!bpm) return
     const token = ++this.phraseToken
@@ -890,7 +891,8 @@ export class Session {
           if (token !== this.phraseToken || sample !== this.sample) return
           this.embeddings.set(key, embedding)
         }
-        candidates.push({ range, embedding, upper: probeScores(probe as Probe, embedding).upper ?? 0 })
+        const { features } = sily.classify(sample.mono.subarray(range[0], range[1]))
+        candidates.push({ range, embedding, upper: probeScores(probe as Probe, [...embedding, ...features]).upper ?? 0 })
       }
     } catch (error) {
       console.error(error)
@@ -1302,8 +1304,9 @@ export class Session {
           this.embeddings.set(key, embedding)
         }
         const current = this.labels[start]
-        if (!current || current.manual) continue
-        const scores = probeScores(probe as Probe, embedding)
+        const features = this.features.get(start)
+        if (!current || current.manual || !features) continue
+        const scores = probeScores(probe as Probe, [...embedding, ...features])
         const [category, confidence] = Object.entries(scores).reduce((a, b) => (b[1] > a[1] ? b : a)) as [Category, number]
         this.labels[start] = { category, confidence, manual: false, scores }
       }

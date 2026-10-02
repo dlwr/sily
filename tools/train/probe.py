@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["numpy", "scikit-learn"]
 # ///
-"""CLAP の音声埋め込みの上にロジスティック回帰を載せ、probe.json を書き出す。
+"""CLAP の音声埋め込みに Rust の特徴量をつなげたものの上にロジスティック回帰を載せ、probe.json を書き出す。
 
 埋め込みはブラウザと同じ transformers.js のモデルを Node で動かして取る（web/scripts/embed-audio.ts）。
     (cd web && pnpm install)
@@ -21,7 +21,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 
-from train import AUDIO, EVAL_FOLDER, EXTRA_FOLDERS, ROOT, role
+from train import AUDIO, EVAL_FOLDER, EXTRA_FOLDERS, ROOT, features, role
 
 PROBE_OUT = ROOT / "web" / "src" / "classify" / "probe.json"
 
@@ -44,8 +44,9 @@ def embeddings(paths: list[pathlib.Path]) -> dict[str, list[float]]:
 
 def load(roots: list[pathlib.Path]) -> tuple[np.ndarray, np.ndarray]:
     labelled = [(p.resolve(), role(p.parent.name)) for root in roots for p in root.glob("*/*") if p.suffix.lower() in AUDIO]
-    rows = embeddings([p for p, _ in labelled])
-    kept = [(rows[str(p)], label) for p, label in labelled if str(p) in rows]
+    paths = [p for p, _ in labelled]
+    embedded, measured = embeddings(paths), features(paths)
+    kept = [(embedded[str(p)] + measured[str(p)], label) for p, label in labelled if str(p) in embedded and str(p) in measured]
     return np.array([x for x, _ in kept], dtype=np.float64).reshape(len(kept), -1), np.array([y for _, y in kept])
 
 
@@ -62,7 +63,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("folders", nargs="+", type=pathlib.Path)
     parser.add_argument("--c", type=float, default=0.05)
-    parser.add_argument("--real-weight", type=float, default=3.0)
+    parser.add_argument("--real-weight", type=float, default=10.0)
     parser.add_argument("--include-eval", action="store_true")
     parser.add_argument("--out", type=pathlib.Path, default=PROBE_OUT)
     args = parser.parse_args()
