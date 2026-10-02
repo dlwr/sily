@@ -96,10 +96,10 @@ export class Sily {
     return { left: left.slice(), right: right.slice() }
   }
 
-  onsets(mono: Float32Array, sensitivity: number): number[] {
+  onsets(mono: Float32Array, sensitivity: number, minGapSeconds: number): number[] {
     const w = this.analysis
     return withFloats(w, [mono], ([ptr]) => {
-      const count = w.analyze_onsets(ptr, mono.length, this.sampleRate, sensitivity)
+      const count = w.analyze_onsets(ptr, mono.length, this.sampleRate, sensitivity, minGapSeconds)
       return Array.from(new Uint32Array(w.memory.buffer, w.result_frames(), count))
     })
   }

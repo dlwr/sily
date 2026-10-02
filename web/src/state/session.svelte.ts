@@ -31,7 +31,7 @@ import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, 
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
-import { followMarkers } from './markers'
+import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
 
 export type PadSettings = {
@@ -1359,7 +1359,8 @@ export class Session {
 
   private sliceByOnsets() {
     if (!this.sily || !this.sample) return
-    this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity).slice(0, MAX_CLASSIFIED), true)
+    const gap = minSliceSeconds(this.sourceBpm ?? this.estimateSourceBpm())
+    this.setMarkers(this.sily.onsets(this.sample.mono, this.sensitivity, gap).slice(0, MAX_CLASSIFIED), true)
   }
 
   gridSlice(count: number) {
