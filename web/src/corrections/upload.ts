@@ -1,11 +1,12 @@
 import type { Category } from '../classify/categories'
 import { sha256Hex } from './hash'
+import type { Split } from './split'
 
 export type UploadResult = 'saved' | 'login' | 'failed'
 
-export async function uploadCorrection(wav: ArrayBuffer, label: Category): Promise<UploadResult> {
+export async function uploadCorrection(wav: ArrayBuffer, label: Category, split: Split): Promise<UploadResult> {
   try {
-    const res = await fetch(`/api/corrections/${await sha256Hex(wav)}?label=${label}`, {
+    const res = await fetch(`/api/corrections/${await sha256Hex(wav)}?label=${label}&split=${split}`, {
       method: 'PUT',
       body: wav,
       headers: { 'content-type': 'audio/wav' },

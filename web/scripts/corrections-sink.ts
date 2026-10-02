@@ -1,20 +1,23 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Plugin } from 'vite'
+import type { Split } from '../src/corrections/split.ts'
 import { handleCorrections, type CorrectionStore } from '../worker/corrections.ts'
 
-export const fileStore = (dir: string): CorrectionStore => ({
-  async save(id, label, audio) {
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-    const labels = entries.filter((e) => e.isDirectory()).map((e) => e.name)
-    await Promise.all(labels.map((other) => rm(join(dir, other, `${id}.wav`), { force: true })))
-    await mkdir(join(dir, label), { recursive: true })
-    await writeFile(join(dir, label, `${id}.wav`), new Uint8Array(audio))
+export const fileStore = (dirs: Record<Split, string>): CorrectionStore => ({
+  async save(id, label, split, audio) {
+    for (const dir of Object.values(dirs)) {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+      const labels = entries.filter((e) => e.isDirectory()).map((e) => e.name)
+      await Promise.all(labels.map((other) => rm(join(dir, other, `${id}.wav`), { force: true })))
+    }
+    await mkdir(join(dirs[split], label), { recursive: true })
+    await writeFile(join(dirs[split], label, `${id}.wav`), new Uint8Array(audio))
   },
 })
 
-export function correctionsSink(dir: string): Plugin {
-  const store = fileStore(dir)
+export function correctionsSink(dirs: Record<Split, string>): Plugin {
+  const store = fileStore(dirs)
   return {
     name: 'sily-corrections-sink',
     apply: 'serve',

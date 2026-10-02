@@ -24,12 +24,12 @@ async function authorized(request: Request, env: Env) {
 }
 
 const cloudStore = (env: Env): CorrectionStore => ({
-  async save(id, label, audio) {
+  async save(id, label, split, audio) {
     await env.AUDIO.put(`corrections/${id}.wav`, audio, { httpMetadata: { contentType: 'audio/wav' } })
     await env.DB.prepare(
-      'INSERT INTO corrections (id, label, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET label = excluded.label, updated_at = excluded.updated_at',
+      'INSERT INTO corrections (id, label, split, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (id) DO UPDATE SET label = excluded.label, split = excluded.split, updated_at = excluded.updated_at',
     )
-      .bind(id, label, new Date().toISOString())
+      .bind(id, label, split, new Date().toISOString())
       .run()
   },
 })

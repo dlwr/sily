@@ -6,32 +6,43 @@ import { fileStore } from './corrections-sink'
 
 const id = 'a'.repeat(64)
 const audio = new Uint8Array([1, 2, 3]).buffer
+const dirs = async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sily-'))
+  return { train: join(root, 'train'), eval: join(root, 'eval') }
+}
 
 describe('fileStore', () => {
   it('writes the audio into the folder for its label', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
-    await fileStore(dir).save(id, 'kick', audio)
-    expect([...(await readFile(join(dir, 'kick', `${id}.wav`)))]).toEqual([1, 2, 3])
+    const d = await dirs()
+    await fileStore(d).save(id, 'kick', 'train', audio)
+    expect([...(await readFile(join(d.train, 'kick', `${id}.wav`)))]).toEqual([1, 2, 3])
+  })
+
+  it('writes held-out audio into the eval folder', async () => {
+    const d = await dirs()
+    await fileStore(d).save(id, 'kick', 'eval', audio)
+    expect(await readdir(join(d.eval, 'kick'))).toEqual([`${id}.wav`])
   })
 
   it('moves the audio when it is labelled again', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
-    await fileStore(dir).save(id, 'kick', audio)
-    await fileStore(dir).save(id, 'snare', audio)
-    expect(await readdir(join(dir, 'kick'))).toEqual([])
+    const d = await dirs()
+    await fileStore(d).save(id, 'kick', 'train', audio)
+    await fileStore(d).save(id, 'snare', 'train', audio)
+    expect(await readdir(join(d.train, 'kick'))).toEqual([])
   })
 
   it('keeps the audio under the new label', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
-    await fileStore(dir).save(id, 'kick', audio)
-    await fileStore(dir).save(id, 'snare', audio)
-    expect(await readdir(join(dir, 'snare'))).toEqual([`${id}.wav`])
+    const d = await dirs()
+    await fileStore(d).save(id, 'kick', 'train', audio)
+    await fileStore(d).save(id, 'snare', 'train', audio)
+    expect(await readdir(join(d.train, 'snare'))).toEqual([`${id}.wav`])
   })
 
   it('ignores stray files next to the label folders', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'sily-'))
-    await writeFile(join(dir, '.DS_Store'), '')
-    await fileStore(dir).save(id, 'kick', audio)
-    expect(await readdir(join(dir, 'kick'))).toEqual([`${id}.wav`])
+    const d = await dirs()
+    await fileStore(d).save(id, 'kick', 'train', audio)
+    await writeFile(join(d.train, '.DS_Store'), '')
+    await fileStore(d).save(id, 'snare', 'train', audio)
+    expect(await readdir(join(d.train, 'snare'))).toEqual([`${id}.wav`])
   })
 })

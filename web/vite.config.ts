@@ -5,5 +5,11 @@ import { correctionsSink } from './scripts/corrections-sink.ts'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [svelte(), correctionsSink(fileURLToPath(new URL('../tmp/train/corrections', import.meta.url)))],
+  plugins: [
+    svelte(),
+    correctionsSink({
+      train: fileURLToPath(new URL('../tmp/train/corrections', import.meta.url)),
+      eval: fileURLToPath(new URL('../tmp/train/eval', import.meta.url)),
+    }),
+  ],
 })
