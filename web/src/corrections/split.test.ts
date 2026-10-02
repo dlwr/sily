@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { splitFor } from './split'
+import { chooseSplit, splitFor } from './split'
 
 describe('splitFor', () => {
   it('holds out a recording whose hash falls in the first fifth', () => {
@@ -15,5 +15,15 @@ describe('splitFor', () => {
     const held = hashes.filter((h) => splitFor(h) === 'eval').length
     expect(held).toBeGreaterThan(150)
     expect(held).toBeLessThan(250)
+  })
+})
+
+describe('chooseSplit', () => {
+  it('holds out a recording marked for evaluation even if its hash would train', () => {
+    expect(chooseSplit('train', true)).toBe('eval')
+  })
+
+  it('follows the hash when the recording is not marked', () => {
+    expect([chooseSplit('train', false), chooseSplit('eval', false)]).toEqual(['train', 'eval'])
   })
 })

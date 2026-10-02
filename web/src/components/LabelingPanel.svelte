@@ -18,6 +18,19 @@
       <span class="muted">{label.manual ? '手で付けた' : `自動 ${Math.round(label.confidence * 100)}%`}</span>
     {/if}
     <span class="muted">直したラベル: 送信済み {session.correctionsSent} 件</span>
+    <label class="held-out">
+      <input
+        type="checkbox"
+        checked={session.heldOut || session.splitByHash === 'eval'}
+        disabled={session.splitByHash === 'eval'}
+        onchange={(e) => {
+          session.setHeldOut(e.currentTarget.checked)
+          e.currentTarget.blur()
+        }}
+      />
+      この録音を評価用にする
+      <span class="muted">{session.splitByHash === 'eval' ? '（自動で評価用になっている）' : '（学習には使わず、精度を測るのに使う）'}</span>
+    </label>
   </div>
   <div class="keys">
     {#each LABEL_KEYS as [code, category]}
