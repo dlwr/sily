@@ -43,31 +43,29 @@ const WINDOW: usize = 1024;
 const HOP: usize = 256;
 const LEAD: usize = WINDOW / 2;
 
-pub fn onset_markers(mono: &[f32], sample_rate: u32, sensitivity: f32) -> Vec<usize> {
+pub fn onset_markers(mono: &[f32], sample_rate: u32, sensitivity: f32, min_gap_seconds: f32) -> Vec<usize> {
     let flux = band_flux(mono, sample_rate);
     if flux.is_empty() {
         return Vec::new();
     }
     let delta = 0.02 + (1.0 - sensitivity.clamp(0.0, 1.0)) * 0.5;
-    let min_gap = ((sample_rate as usize / 20) / HOP).max(1);
-    let mut found: Vec<usize> = Vec::new();
-    let mut last: Option<usize> = None;
-    for i in 0..flux.len() {
-        let lo = i.saturating_sub(3);
-        let hi = (i + 4).min(flux.len());
-        if flux[lo..hi].iter().any(|&f| f > flux[i]) {
-            continue;
+    let min_gap = ((min_gap_seconds * sample_rate as f32 / HOP as f32).round() as usize).max(1);
+    let mut peaks: Vec<usize> = (0..flux.len())
+        .filter(|&i| {
+            let lo = i.saturating_sub(3);
+            let hi = (i + 4).min(flux.len());
+            !flux[lo..hi].iter().any(|&f| f > flux[i]) && flux[i] >= local_median(&flux, i, 16) + delta
+        })
+        .collect();
+    peaks.sort_by(|&a, &b| flux[b].total_cmp(&flux[a]).then(a.cmp(&b)));
+    let mut kept: Vec<usize> = Vec::new();
+    for i in peaks {
+        if kept.iter().all(|&k| k.abs_diff(i) >= min_gap) {
+            kept.push(i);
         }
-        if flux[i] < local_median(&flux, i, 16) + delta {
-            continue;
-        }
-        if last.is_some_and(|l| i - l < min_gap) {
-            continue;
-        }
-        last = Some(i);
-        found.push(refine(mono, (i * HOP).saturating_sub(LEAD)));
     }
-    found
+    kept.sort_unstable();
+    kept.into_iter().map(|i| refine(mono, (i * HOP).saturating_sub(LEAD))).collect()
 }
 
 const BAND_EDGES_HZ: [f32; 4] = [0.0, 200.0, 1_000.0, 4_000.0];
@@ -156,6 +154,8 @@ fn refine(mono: &[f32], window_start: usize) -> usize {
 mod tests {
     use super::*;
 
+    const GAP: f32 = 0.05;
+
     #[test]
     fn no_markers_means_the_whole_sample_is_one_slice() {
         assert_eq!(slices(&[], 100), vec![0..100]);
@@ -215,7 +215,7 @@ mod tests {
     fn detects_onsets_of_percussive_hits() {
         let sr = 44_100;
         let at = [4_410, 26_000, 50_000, 71_000];
-        let found = onset_markers(&clicks(sr, &at, 88_200), sr, 0.5);
+        let found = onset_markers(&clicks(sr, &at, 88_200), sr, 0.5, GAP);
         assert_eq!(found.len(), at.len(), "found {found:?}");
         for (f, a) in found.iter().zip(at) {
             assert!(f.abs_diff(a) < 512, "onset {f} too far from {a}");
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn silence_has_no_onsets() {
-        assert!(onset_markers(&vec![0.0; 44_100], 44_100, 0.5).is_empty());
+        assert!(onset_markers(&vec![0.0; 44_100], 44_100, 0.5, GAP).is_empty());
     }
 
     #[test]
@@ -234,9 +234,33 @@ mod tests {
         for i in 0..2000 {
             s[26_000 + i] += (i as f32 * 0.7).sin() * 0.05 * (-(i as f32) / 300.0).exp();
         }
-        let loose = onset_markers(&s, sr, 0.9).len();
-        let strict = onset_markers(&s, sr, 0.1).len();
+        let loose = onset_markers(&s, sr, 0.9, GAP).len();
+        let strict = onset_markers(&s, sr, 0.1, GAP).len();
         assert!(strict < loose, "strict {strict} loose {loose}");
+    }
+
+    #[test]
+    fn keeps_the_stronger_of_two_onsets_closer_than_the_minimum_gap() {
+        let sr = 44_100;
+        let weak: Vec<f32> = clicks(sr, &[20_000], 66_150).iter().map(|x| x * 0.4).collect();
+        let mut s = clicks(sr, &[22_646], 66_150);
+        for (a, b) in s.iter_mut().zip(weak) {
+            *a += b;
+        }
+        let found = onset_markers(&s, sr, 0.5, 0.1);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].abs_diff(22_646) < 512, "{found:?}");
+    }
+
+    #[test]
+    fn a_longer_minimum_gap_thins_out_hits_that_come_too_fast() {
+        let sr = 44_100;
+        let at: Vec<usize> = (0..10).map(|i| 4_000 + i * 3_000).collect();
+        let s = clicks(sr, &at, 44_100);
+        let fine = onset_markers(&s, sr, 0.5, 0.05).len();
+        let coarse = onset_markers(&s, sr, 0.5, 0.1).len();
+        assert_eq!(fine, 10);
+        assert!(coarse <= 5, "coarse {coarse}");
     }
 
     fn kicks(at: &[usize], frames: usize) -> Vec<f32> {
@@ -259,7 +283,7 @@ mod tests {
         for (a, b) in s.iter_mut().zip(hats) {
             *a += b * 0.3;
         }
-        let found = onset_markers(&s, sr, 0.5);
+        let found = onset_markers(&s, sr, 0.5, GAP);
         for want in [0, 14_700, 29_400, 44_100] {
             assert!(found.iter().any(|f| f.abs_diff(want) < 1024), "missing {want} in {found:?}");
         }
@@ -267,7 +291,7 @@ mod tests {
 
     #[test]
     fn falling_kick_pitch_is_not_a_new_onset() {
-        let found = onset_markers(&kicks(&[0, 29_400], 58_800), 44_100, 0.5);
+        let found = onset_markers(&kicks(&[0, 29_400], 58_800), 44_100, 0.5, GAP);
         assert_eq!(found.len(), 2, "{found:?}");
     }
 
@@ -290,7 +314,7 @@ mod tests {
         for (a, b) in s.iter_mut().zip(snares(&[14_700, 44_100], 58_800)) {
             *a += b;
         }
-        let found = onset_markers(&s, 44_100, 0.5);
+        let found = onset_markers(&s, 44_100, 0.5, GAP);
         for want in [0, 14_700, 29_400, 44_100] {
             assert!(found.iter().any(|f| f.abs_diff(want) < 1024), "missing {want} in {found:?}");
         }

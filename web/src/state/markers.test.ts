@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { followMarkers } from './markers'
+import { followMarkers, minSliceSeconds } from './markers'
 
 const identity = (n = 4) => Array.from({ length: n }, (_, i) => i)
 
@@ -28,5 +28,19 @@ describe('followMarkers', () => {
 
   it('offers new slices to pads that had none', () => {
     expect(followMarkers([0], [0, 100, 200], identity()).slice(0, 3)).toEqual([0, 1, 2])
+  })
+})
+
+describe('minSliceSeconds', () => {
+  it('keeps slices a little under a sixteenth note long at the source tempo', () => {
+    expect(minSliceSeconds(120)).toBeCloseTo(0.1)
+  })
+
+  it('allows longer slices for a slower source', () => {
+    expect(minSliceSeconds(60)).toBeCloseTo(0.2)
+  })
+
+  it('falls back to a short gap when the tempo is unknown', () => {
+    expect(minSliceSeconds(null)).toBe(0.05)
   })
 })

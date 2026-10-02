@@ -25,7 +25,7 @@ export type SilyExports = {
   engine_beat_at_time(time: number): number
   engine_process(frames: number, time: number): void
   engine_output(channel: number): number
-  analyze_onsets(mono: number, frames: number, sampleRate: number, sensitivity: number): number
+  analyze_onsets(mono: number, frames: number, sampleRate: number, sensitivity: number, minGapSeconds: number): number
   result_frames(): number
   analyze_bpm(mono: number, frames: number, sampleRate: number): number
   pitch_shift(left: number, right: number, frames: number, sampleRate: number, semitones: number): number

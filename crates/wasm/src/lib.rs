@@ -149,8 +149,8 @@ pub extern "C" fn engine_output(channel: u32) -> *const f32 {
 
 #[no_mangle]
 #[allow(static_mut_refs)]
-pub unsafe extern "C" fn analyze_onsets(mono: *const f32, frames: u32, sample_rate: u32, sensitivity: f32) -> u32 {
-    RESULT_FRAMES = onset_markers(floats(mono, frames), sample_rate, sensitivity)
+pub unsafe extern "C" fn analyze_onsets(mono: *const f32, frames: u32, sample_rate: u32, sensitivity: f32, min_gap_seconds: f32) -> u32 {
+    RESULT_FRAMES = onset_markers(floats(mono, frames), sample_rate, sensitivity, min_gap_seconds)
         .into_iter()
         .map(|f| f as u32)
         .collect();

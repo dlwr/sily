@@ -12,3 +12,10 @@ export const followMarkers = (before: number[], after: number[], padSlices: numb
   let spare = newStarts.length
   return kept.map((slice) => slice ?? free.shift() ?? spare++)
 }
+
+const SIXTEENTHS_PER_BEAT = 4
+const SLACK = 0.8
+const UNKNOWN_TEMPO_SECONDS = 0.05
+
+export const minSliceSeconds = (bpm: number | null): number =>
+  bpm ? (SLACK * 60) / bpm / SIXTEENTHS_PER_BEAT : UNKNOWN_TEMPO_SECONDS
