@@ -1,8 +1,5 @@
-import type { Category } from './categories'
-
-export type LabelEmbeddings = Partial<Record<Category, number[][]>>
-
-const SHARPNESS = 30
+export const CLAP_RATE = 48000
+export const MAX_CLIP_SECONDS = 4
 
 export const resample = (audio: Float32Array, from: number, to: number): Float32Array => {
   if (from === to) return audio.slice()
@@ -18,13 +15,10 @@ export const resample = (audio: Float32Array, from: number, to: number): Float32
   return out
 }
 
-export const pickLabel = (embedding: number[], labels: LabelEmbeddings): { category: Category; confidence: number } => {
-  const norm = Math.hypot(...embedding) || 1
-  const scores = (Object.entries(labels) as [Category, number[][]][]).map(([category, prompts]) => ({
-    category,
-    score: Math.max(...prompts.map((p) => p.reduce((s, x, i) => s + (x * embedding[i]) / norm, 0))),
-  }))
-  const best = scores.reduce((a, b) => (b.score > a.score ? b : a))
-  const total = scores.reduce((sum, s) => sum + Math.exp((s.score - best.score) * SHARPNESS), 0)
-  return { category: best.category, confidence: 1 / total }
+export const clipForClap = (mono: Float32Array, sampleRate: number): Float32Array =>
+  resample(mono.subarray(0, sampleRate * MAX_CLIP_SECONDS), sampleRate, CLAP_RATE)
+
+export const normalize = (v: number[]): number[] => {
+  const norm = Math.hypot(...v)
+  return norm === 0 ? v : v.map((x) => x / norm)
 }

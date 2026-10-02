@@ -142,7 +142,7 @@
           </span>
         {/if}
         {#if session.processing > 0}<span class="muted">ストレッチを計算中…</span>{/if}
-        {#if session.refining}<span class="muted">うわものを判定中（初回はモデルを読み込むので少し待つ）</span>{/if}
+        {#if session.refining}<span class="muted">音を聞き分け中（初回はモデルを読み込むので少し待つ）</span>{/if}
         {#if session.message}<span class="error">{session.message}</span>{/if}
       </div>
       <Waveform {session} />

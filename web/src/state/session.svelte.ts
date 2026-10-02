@@ -4,6 +4,8 @@ import { arrangePads, remapEvents, type Category } from '../classify/categories'
 import { buildKit, dropUnplacedEvents } from '../classify/kit'
 import { ClapClient } from '../classify/clapClient'
 import { resample } from '../classify/clap'
+import { probeScores, type Probe } from '../classify/probe'
+import probe from '../classify/probe.json'
 import { DEFAULT_FX, isFlat, type FxSettings } from '../fx/fx'
 import { newId } from '../storage/db'
 import { pack, unpack } from '../storage/bundle'
@@ -85,8 +87,6 @@ const PITCHEDNESS = 11
 const PITCH_HZ = 108
 const HAT_CHOKE = 1
 const CANDIDATES = 4
-const CLAP_MAX_SECONDS = 10
-const UPPER_KINDS: Category[] = ['keys', 'vocal', 'melody', 'fx']
 const identity = () => Array.from({ length: PADS }, (_, i) => i)
 const EXPORT_TAIL_SECONDS = 2
 const SILENCE = 1e-4
@@ -159,6 +159,7 @@ export class Session {
   private engineSample: { left: Float32Array; right: Float32Array } | null = null
   private loadedStretch: number | null = null
   private features = new Map<number, number[]>()
+  private embeddings = new Map<string, number[]>()
   private unsentCorrections: { wav: ArrayBuffer; label: Category; split: Promise<Split> }[] = []
   private splits = new WeakMap<Sample, Promise<Split>>()
   private sendingCorrections = false
@@ -568,6 +569,7 @@ export class Session {
     this.markers = []
     this.labels = {}
     this.features.clear()
+    this.embeddings.clear()
     this.padSlices = identity()
     this.pads.forEach((p) => {
       if (!p.sample) p.stretch = false
@@ -1216,34 +1218,39 @@ export class Session {
     }
     this.autoChoke()
     this.shapePads()
-    this.refineUpper()
+    this.refineWithClap()
   }
 
-  private async refineUpper() {
+  private async refineWithClap() {
     const sample = this.sample
     if (!sample) return
     const generation = ++this.refineGeneration
-    const markers = [...this.markers]
-    const targets = Object.entries(this.labels)
-      .filter(([, l]) => !l.manual && l.category === 'upper')
-      .map(([start]) => {
-        const from = Number(start)
-        const next = markers[markers.indexOf(from) + 1] ?? sample.left.length
-        return { start: from, end: Math.min(next, from + CLAP_MAX_SECONDS * this.sampleRate) }
-      })
-      .filter(({ start, end }) => end > start)
+    const targets = Array.from({ length: Math.min(Math.max(1, this.markers.length), MAX_CLASSIFIED) }, (_, slice) => ({
+      start: this.sliceStart(slice)!,
+      end: this.markers[slice + 1] ?? sample.left.length,
+    })).filter(({ start, end }) => end > start && !this.labels[start]?.manual)
     this.refining = targets.length > 0
     if (targets.length === 0) return
     try {
       for (const { start, end } of targets) {
-        const result = await this.clap.classify(sample.mono.slice(start, end), this.sampleRate, UPPER_KINDS)
-        if (generation !== this.refineGeneration) return
+        const key = `${start}:${end}`
+        let embedding = this.embeddings.get(key)
+        if (!embedding) {
+          embedding = await this.clap.embed(sample.mono.subarray(start, end), this.sampleRate)
+          if (generation !== this.refineGeneration) return
+          this.embeddings.set(key, embedding)
+        }
         const current = this.labels[start]
-        if (current && !current.manual) this.labels[start] = { ...current, ...result }
+        if (!current || current.manual) continue
+        const scores = probeScores(probe as Probe, embedding)
+        const [category, confidence] = Object.entries(scores).reduce((a, b) => (b[1] > a[1] ? b : a)) as [Category, number]
+        this.labels[start] = { category, confidence, manual: false, scores }
       }
+      this.autoChoke()
+      this.shapePads()
     } catch (error) {
       console.error(error)
-      this.message = 'うわもの判定のモデルを読み込めなかった'
+      this.message = '音を聞き分けるモデルを読み込めなかった'
     } finally {
       if (generation === this.refineGeneration) this.refining = false
     }
