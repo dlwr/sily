@@ -8,6 +8,7 @@
     (cd web && pnpm install)
     uv run tools/train/probe.py tmp/train/freesound
 
+tmp/train/corrections/ など実際の録音から切った音は、--real-weight 倍の重みで学習する。
 tmp/train/eval/ の音は学習に使わずに精度を出す。--include-eval を付けると、精度を出したあと評価用も含めて学習し直して書き出す。
 """
 
@@ -45,15 +46,15 @@ def load(roots: list[pathlib.Path]) -> tuple[np.ndarray, np.ndarray]:
     labelled = [(p.resolve(), role(p.parent.name)) for root in roots for p in root.glob("*/*") if p.suffix.lower() in AUDIO]
     rows = embeddings([p for p, _ in labelled])
     kept = [(rows[str(p)], label) for p, label in labelled if str(p) in rows]
-    return np.array([x for x, _ in kept], dtype=np.float64), np.array([y for _, y in kept])
+    return np.array([x for x, _ in kept], dtype=np.float64).reshape(len(kept), -1), np.array([y for _, y in kept])
 
 
-def fit(x: np.ndarray, y: np.ndarray, c: float) -> tuple[LogisticRegression, np.ndarray, np.ndarray]:
+def fit(x: np.ndarray, y: np.ndarray, c: float, weight: np.ndarray | None = None) -> tuple[LogisticRegression, np.ndarray, np.ndarray]:
     mean = x.mean(axis=0)
     scale = x.std(axis=0)
     scale[scale == 0] = 1
     model = LogisticRegression(C=c, max_iter=2000, class_weight="balanced")
-    model.fit((x - mean) / scale, y)
+    model.fit((x - mean) / scale, y, sample_weight=weight)
     return model, mean, scale
 
 
@@ -61,14 +62,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("folders", nargs="+", type=pathlib.Path)
     parser.add_argument("--c", type=float, default=0.05)
+    parser.add_argument("--real-weight", type=float, default=3.0)
     parser.add_argument("--include-eval", action="store_true")
     parser.add_argument("--out", type=pathlib.Path, default=PROBE_OUT)
     args = parser.parse_args()
 
     given = [f.resolve() for f in args.folders]
-    folders = args.folders + [f for f in EXTRA_FOLDERS if f.exists() and f.resolve() not in given]
-    x, y = load(folders)
-    model, mean, scale = fit(x, y, args.c)
+    xb, yb = load(args.folders)
+    xr, yr = load([f for f in EXTRA_FOLDERS if f.exists() and f.resolve() not in given])
+    x, y = np.concatenate([xb, xr]), np.concatenate([yb, yr])
+    weight = np.concatenate([np.ones(len(yb)), np.full(len(yr), args.real_weight)])
+    model, mean, scale = fit(x, y, args.c, weight)
     if EVAL_FOLDER.exists():
         ex, ey = load([EVAL_FOLDER])
         if len(ey):
@@ -76,7 +80,8 @@ def main() -> None:
             print(classification_report(ey, model.predict((ex - mean) / scale), zero_division=0))
             if args.include_eval:
                 x, y = np.concatenate([x, ex]), np.concatenate([y, ey])
-                model, mean, scale = fit(x, y, args.c)
+                weight = np.concatenate([weight, np.full(len(ey), args.real_weight)])
+                model, mean, scale = fit(x, y, args.c, weight)
 
     exported = {
         "classes": [str(c) for c in model.classes_],
