@@ -1,7 +1,9 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
 import type { ToWorklet } from '../audio/messages'
-import { arrangePads, remapEvents, type Category } from '../classify/categories'
-import { buildKit, dropUnplacedEvents } from '../classify/kit'
+import { arrangePads, remapEvents, roleOf, type Category } from '../classify/categories'
+import { buildKit, dropUnplacedEvents, UPPER_PADS, type KitCandidate } from '../classify/kit'
+import { beatGrid, phraseRanges, pickPhrases, type PhraseCandidate } from '../classify/phrases'
+import { sliceQuality } from '../classify/quality'
 import { ClapClient } from '../classify/clapClient'
 import { resample } from '../classify/clap'
 import { probeScores, type Probe } from '../classify/probe'
@@ -51,6 +53,7 @@ export type Label = {
   scores: Partial<Record<Category, number>>
 }
 type Heard = { events: PadEvent[]; length: number }
+type Span = [number, number] | null
 
 type Doc = {
   events: PadEvent[]
@@ -59,6 +62,7 @@ type Doc = {
   song: string[]
   markers: number[]
   padSlices: number[]
+  padSpans: Span[]
   pads: PadSettings[]
   labels: Record<number, Label>
 }
@@ -87,7 +91,9 @@ const PITCHEDNESS = 11
 const PITCH_HZ = 108
 const HAT_CHOKE = 1
 const CANDIDATES = 4
+const MAX_PHRASE_CANDIDATES = 32
 const identity = () => Array.from({ length: PADS }, (_, i) => i)
+const noSpans = (): Span[] => Array(PADS).fill(null)
 const EXPORT_TAIL_SECONDS = 2
 const SILENCE = 1e-4
 
@@ -125,6 +131,7 @@ export class Session {
   sourceSpeed = $state<SourceSpeed>({ mode: 'tape', rate: 1 })
   sourceBpm = $state<number | null>(null)
   padSlices = $state<number[]>(identity())
+  padSpans = $state<Span[]>(noSpans())
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
   correctionLogin = $state(false)
@@ -152,6 +159,7 @@ export class Session {
   private beforeGenerate: PadEvent[] | null = null
   private clap = new ClapClient()
   private refineGeneration = 0
+  private phraseToken = 0
 
   private lastTick = { frame: 0, time: 0 }
   private capture: Capture | null = null
@@ -329,6 +337,7 @@ export class Session {
       name: this.projectName,
       markers: this.markers,
       padSlices: this.padSlices,
+      padSpans: this.padSpans,
       pads: this.pads,
       events: this.events,
       patterns: this.allPatterns(),
@@ -436,6 +445,7 @@ export class Session {
     this.markers = st.markers ?? []
     this.labels = st.labels ?? {}
     this.padSlices = st.padSlices ?? identity()
+    this.padSpans = st.padSpans ?? noSpans()
     this.pads = (st.pads ?? []).map((p: Partial<PadSettings>) => ({
       ...freshPad(),
       ...p,
@@ -536,6 +546,7 @@ export class Session {
     this.markers = []
     this.labels = {}
     this.padSlices = identity()
+    this.padSpans = noSpans()
     this.stopAudition()
     this.sily?.send({ type: 'load', left: new Float32Array(0), right: new Float32Array(0) })
     this.history = new History<Doc>()
@@ -571,6 +582,7 @@ export class Session {
     this.features.clear()
     this.embeddings.clear()
     this.padSlices = identity()
+    this.padSpans = noSpans()
     this.pads.forEach((p) => {
       if (!p.sample) p.stretch = false
     })
@@ -681,11 +693,13 @@ export class Session {
   labelOf(pad: number): Label | null {
     const own = this.pads[pad]?.sample
     if (own) return { category: own.category, confidence: 1, manual: true, scores: { [own.category]: 1 } }
+    if (this.padSpans[pad]) return { category: 'upper', confidence: 1, manual: false, scores: { upper: 1 } }
     const start = this.sliceStart(this.padSlices[pad])
     return start === null ? null : (this.labels[start] ?? null)
   }
 
   setLabel(pad: number, category: Category) {
+    if (this.padSpans[pad]) return
     this.labelSlice(this.padSlices[pad], category)
   }
 
@@ -809,7 +823,7 @@ export class Session {
 
   arrangePads() {
     this.checkpoint()
-    const free = this.freePads()
+    const free = this.freePads().filter((pad) => !this.padSpans[pad])
     const arranged = arrangePads(
       free.map((pad) => this.padSlices[pad]),
       (slice) => {
@@ -829,19 +843,66 @@ export class Session {
   }
 
   private applyKit() {
+    const sample = this.sample
+    if (!sample) return
     const count = Math.min(Math.max(1, this.markers.length), MAX_CLASSIFIED)
-    const candidates = Array.from({ length: count }, (_, slice) => {
-      const start = this.sliceStart(slice)
-      return { slice, scores: (start !== null && this.labels[start]?.scores) || {} }
+    const candidates = Array.from({ length: count }, (_, slice): KitCandidate => {
+      const start = this.sliceStart(slice)!
+      const end = this.markers[slice + 1] ?? sample.left.length
+      return {
+        slice,
+        scores: this.labels[start]?.scores ?? {},
+        quality: sliceQuality(sample.mono, start, end, this.sampleRate),
+        embedding: this.embeddings.get(`${start}:${end}`),
+      }
     })
     const kit = buildKit(candidates)
     const after = [...this.padSlices]
     const free = this.freePads()
+    this.padSpans = this.padSpans.map((span, pad) => (free.includes(pad) ? null : span))
     const taken = new Set(this.padSlices.filter((_, pad) => !free.includes(pad)))
     const picks = kit.filter((slice) => !taken.has(slice))
     free.forEach((pad, i) => (after[pad] = picks[i]))
     this.events = dropUnplacedEvents(this.events, this.padSlices, after)
     this.applyPadSlices(after)
+    this.sendMarkers()
+    void this.placePhrases()
+  }
+
+  private async placePhrases() {
+    const sample = this.sample
+    if (!sample) return
+    const bpm = this.sourceBpm ?? this.estimateSourceBpm()
+    if (!bpm) return
+    const token = ++this.phraseToken
+    const kicks = Object.entries(this.labels).flatMap(([start, l]) => (roleOf(l.category) === 'kick' ? [Number(start)] : []))
+    const grid = beatGrid({ onsets: this.markers, kicks, frames: sample.left.length, sampleRate: this.sampleRate, bpm })
+    const candidates: PhraseCandidate[] = []
+    try {
+      for (const range of phraseRanges(grid, sample.left.length).slice(0, MAX_PHRASE_CANDIDATES)) {
+        const key = `${range[0]}:${range[1]}`
+        let embedding = this.embeddings.get(key)
+        if (!embedding) {
+          embedding = await this.clap.embed(sample.mono.subarray(range[0], range[1]), this.sampleRate)
+          if (token !== this.phraseToken || sample !== this.sample) return
+          this.embeddings.set(key, embedding)
+        }
+        candidates.push({ range, embedding, upper: probeScores(probe as Probe, embedding).upper ?? 0 })
+      }
+    } catch (error) {
+      console.error(error)
+      return
+    }
+    const picked = pickPhrases(candidates, UPPER_PADS.length)
+    const free = this.freePads()
+    const placed = UPPER_PADS.filter((pad, i) => free.includes(pad) && picked[i])
+    if (placed.length === 0) return
+    this.padSpans = this.padSpans.map((span, pad) => (placed.includes(pad) ? picked[UPPER_PADS.indexOf(pad)] : span))
+    this.sendMarkers()
+    this.autoChoke()
+    this.shapePads()
+    this.syncEvents()
+    this.invalidateStretched(placed)
   }
 
   private freePads(): number[] {
@@ -988,7 +1049,7 @@ export class Session {
     this.pads.forEach((p, pad) => {
       if (p.sample) return
       const label = this.labelOf(pad)
-      const start = this.sliceStart(this.padSlices[pad])
+      const start = this.padSpans[pad] ? null : this.sliceStart(this.padSlices[pad])
       const features = start === null ? undefined : this.features.get(start)
       let changed = false
       if (p.pitchAuto) {
@@ -1054,6 +1115,7 @@ export class Session {
       song: this.song,
       markers: this.markers,
       padSlices: this.padSlices,
+      padSpans: this.padSpans,
       pads: this.pads,
       labels: this.labels,
     }) as Doc
@@ -1070,6 +1132,7 @@ export class Session {
     this.syncTransport()
     this.markers = doc.markers
     this.padSlices = doc.padSlices
+    this.padSpans = doc.padSpans
     this.pads = doc.pads
     this.labels = doc.labels
     this.kitPending = false
@@ -1212,10 +1275,6 @@ export class Session {
       labels[start] = { category: result.category, confidence: result.confidence, manual: false, scores: result.scores }
     }
     this.labels = labels
-    if (this.kitPending) {
-      this.kitPending = false
-      this.applyKit()
-    }
     this.autoChoke()
     this.shapePads()
     this.refineWithClap()
@@ -1228,9 +1287,8 @@ export class Session {
     const targets = Array.from({ length: Math.min(Math.max(1, this.markers.length), MAX_CLASSIFIED) }, (_, slice) => ({
       start: this.sliceStart(slice)!,
       end: this.markers[slice + 1] ?? sample.left.length,
-    })).filter(({ start, end }) => end > start && !this.labels[start]?.manual)
-    this.refining = targets.length > 0
-    if (targets.length === 0) return
+    })).filter(({ start, end }) => end > start)
+    this.refining = true
     try {
       for (const { start, end } of targets) {
         const key = `${start}:${end}`
@@ -1252,7 +1310,13 @@ export class Session {
       console.error(error)
       this.message = '音を聞き分けるモデルを読み込めなかった'
     } finally {
-      if (generation === this.refineGeneration) this.refining = false
+      if (generation === this.refineGeneration) {
+        this.refining = false
+        if (this.kitPending) {
+          this.kitPending = false
+          this.applyKit()
+        }
+      }
     }
   }
 
@@ -1309,6 +1373,8 @@ export class Session {
 
   sliceRange(pad: number): [number, number] | null {
     if (!this.sample) return null
+    const span = this.padSpans[pad]
+    if (span) return span
     const slice = this.padSlices[pad]
     const len = this.sample.left.length
     if (this.markers.length === 0) return slice === 0 ? [0, len] : null
@@ -1437,6 +1503,7 @@ export class Session {
       { type: 'sourceRate', rate: this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1 },
       { type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) },
       { type: 'padSlices', slices: [...this.padSlices] },
+      { type: 'padSpans', spans: this.engineSpans() },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'fx', pad, fx: $state.snapshot(p.fx) })),
       ...[...this.own].map(([pad, a]): ToWorklet => ({ type: 'padSample', pad, left: a.left, right: a.right })),
@@ -1485,6 +1552,11 @@ export class Session {
   private sendMarkers() {
     this.sily?.send({ type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) })
     this.sily?.send({ type: 'padSlices', slices: [...this.padSlices] })
+    this.sily?.send({ type: 'padSpans', spans: this.engineSpans() })
+  }
+
+  private engineSpans(): Span[] {
+    return this.padSpans.map((span) => (span ? [this.map.toEngine(span[0]), this.map.toEngine(span[1])] : null))
   }
 
   private invalidateStretched(only?: number[]) {

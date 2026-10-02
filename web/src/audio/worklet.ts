@@ -51,6 +51,9 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'padSlices':
         msg.slices.forEach((slice, pad) => w.engine_set_pad_slice(pad, slice))
         break
+      case 'padSpans':
+        msg.spans.forEach((span, pad) => w.engine_set_pad_span(pad, span?.[0] ?? 0, span?.[1] ?? 0))
+        break
       case 'pad':
         w.engine_set_pad(msg.pad, msg.pitch, msg.gain, msg.reverse ? 1 : 0)
         w.engine_set_choke_group(msg.pad, msg.choke)
