@@ -180,6 +180,7 @@ export class Session {
   private loadToken = 0
   private history = new History<Doc>()
   private kitPending = false
+  private playWhenBuilt = false
   private stretchVersion = 0
   private requested = new Set<string>()
   private inflight = new Set<Promise<unknown>>()
@@ -560,7 +561,7 @@ export class Session {
       const { left, right } = await this.sily.decode(file)
       if (token !== this.loadToken) return
       this.setSample(file.name, left, right)
-      this.sliceByOnsets()
+      this.buildFromSource()
     } catch {
       this.message = `${file.name} を読み込めなかった`
     }
@@ -573,6 +574,8 @@ export class Session {
     if (this.keyAuto) this.key = estimateKey(this.sily.chroma(this.sample.mono))
     this.sourceSpeed = { mode: 'tape', rate: 1 }
     this.sourceBpm = null
+    this.kitPending = false
+    this.playWhenBuilt = false
     this.loadEngineSample(left, right, null)
     this.sily.send({ type: 'sourceRate', rate: 1 })
     this.adopt()
@@ -625,7 +628,7 @@ export class Session {
     this.capturing = null
     if (left.length > 0) {
       this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
-      this.sliceByOnsets()
+      this.buildFromSource()
     }
   }
 
@@ -839,12 +842,12 @@ export class Session {
 
   buildKit() {
     this.checkpoint()
-    this.applyKit()
+    void this.applyKit()
   }
 
-  private applyKit() {
+  private applyKit(): Promise<void> {
     const sample = this.sample
-    if (!sample) return
+    if (!sample) return Promise.resolve()
     const count = Math.min(Math.max(1, this.markers.length), MAX_CLASSIFIED)
     const candidates = Array.from({ length: count }, (_, slice): KitCandidate => {
       const start = this.sliceStart(slice)!
@@ -866,7 +869,7 @@ export class Session {
     this.events = dropUnplacedEvents(this.events, this.padSlices, after)
     this.applyPadSlices(after)
     this.sendMarkers()
-    void this.placePhrases()
+    return this.placePhrases()
   }
 
   private async placePhrases() {
@@ -1314,7 +1317,7 @@ export class Session {
         this.refining = false
         if (this.kitPending) {
           this.kitPending = false
-          this.applyKit()
+          void this.applyKit().then(() => this.finishBuild())
         }
       }
     }
@@ -1335,6 +1338,20 @@ export class Session {
     if (!this.sily || !this.sample) return
     this.checkpoint()
     this.sliceByOnsets()
+  }
+
+  private buildFromSource() {
+    this.detectBpm()
+    this.sliceByOnsets()
+    this.kitPending = true
+    this.playWhenBuilt = true
+  }
+
+  private finishBuild() {
+    if (!this.playWhenBuilt) return
+    this.playWhenBuilt = false
+    this.generateCandidates()
+    if (!this.playing && this.candidates.length > 0) this.togglePlaying()
   }
 
   private sliceByOnsets() {
