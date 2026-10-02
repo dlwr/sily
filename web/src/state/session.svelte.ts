@@ -26,7 +26,7 @@ import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { uploadCorrection } from '../corrections/upload'
 import { sha256Hex } from '../corrections/hash'
-import { splitFor, type Split } from '../corrections/split'
+import { chooseSplit, splitFor, type Split } from '../corrections/split'
 import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
@@ -130,6 +130,8 @@ export class Session {
   message = $state('')
   sourceSpeed = $state<SourceSpeed>({ mode: 'tape', rate: 1 })
   sourceBpm = $state<number | null>(null)
+  heldOut = $state(false)
+  splitByHash = $state<Split | null>(null)
   padSlices = $state<number[]>(identity())
   padSpans = $state<Span[]>(noSpans())
   labels = $state<Record<number, Label>>({})
@@ -170,6 +172,7 @@ export class Session {
   private embeddings = new Map<string, number[]>()
   private unsentCorrections: { wav: ArrayBuffer; label: Category; split: Promise<Split> }[] = []
   private splits = new WeakMap<Sample, Promise<Split>>()
+  private sent = new WeakMap<Sample, { wav: ArrayBuffer; label: Category }[]>()
   private sendingCorrections = false
   private tickBeat: number | null = null
   private heard: Heard | null = null
@@ -358,6 +361,7 @@ export class Session {
       looseness: this.looseness,
       sourceSpeed: this.sourceSpeed,
       sourceBpm: this.sourceBpm,
+      heldOut: this.heldOut,
       masterFx: this.masterFx,
       key: this.key,
       keyAuto: this.keyAuto,
@@ -472,6 +476,7 @@ export class Session {
     this.looseness = st.looseness ?? this.looseness
     this.sourceSpeed = st.sourceSpeed ?? { mode: 'tape', rate: 1 }
     this.sourceBpm = st.sourceBpm ?? null
+    this.heldOut = st.heldOut ?? false
     this.masterFx = { ...DEFAULT_FX, ...st.masterFx }
     this.key = st.key ?? this.key
     this.keyAuto = st.keyAuto ?? true
@@ -574,6 +579,8 @@ export class Session {
     if (this.keyAuto) this.key = estimateKey(this.sily.chroma(this.sample.mono))
     this.sourceSpeed = { mode: 'tape', rate: 1 }
     this.sourceBpm = null
+    this.heldOut = false
+    this.splitByHash = null
     this.kitPending = false
     this.playWhenBuilt = false
     this.loadEngineSample(left, right, null)
@@ -716,7 +723,11 @@ export class Session {
   }
 
   startLabeling() {
-    if (this.sliceCount === 0) return
+    if (this.sliceCount === 0 || !this.sample) return
+    const sample = this.sample
+    void this.splitOf(sample).then((split) => {
+      if (this.sample === sample) this.splitByHash = split
+    })
     this.showLabelingSlice(0)
   }
 
@@ -805,9 +816,25 @@ export class Session {
     if (start === null || !this.sample) return
     const end = this.markers[slice + 1] ?? this.sample.left.length
     const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
-    this.unsentCorrections.push({ wav, label, split: this.splitOf(this.sample) })
+    this.sent.set(this.sample, [...(this.sent.get(this.sample) ?? []), { wav, label }])
+    this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.sample) })
     this.correctionsUnsent = this.unsentCorrections.length
     void this.flushCorrections()
+  }
+
+  setHeldOut(heldOut: boolean) {
+    this.heldOut = heldOut
+    if (!this.sample) return
+    for (const { wav, label } of this.sent.get(this.sample) ?? []) {
+      this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.sample) })
+    }
+    this.correctionsUnsent = this.unsentCorrections.length
+    void this.flushCorrections()
+  }
+
+  private splitToSend(sample: Sample): Promise<Split> {
+    const heldOut = this.heldOut
+    return this.splitOf(sample).then((byHash) => chooseSplit(byHash, heldOut))
   }
 
   private splitOf(sample: Sample): Promise<Split> {
