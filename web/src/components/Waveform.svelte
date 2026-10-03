@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { padForSlice } from '../state/markers'
   import type { Session } from '../state/session.svelte'
   import { follow, scrollView, zoomView, type View } from '../state/view'
 
@@ -98,6 +99,7 @@
     }
 
     ctx.font = '600 12px system-ui, sans-serif'
+    const own = session.pads.map((p) => p.sample !== null)
     session.markers.forEach((m, i) => {
       if (m < view.start || m > view.end) return
       const x = Math.round(xOfFrame(m)) + 0.5
@@ -106,13 +108,21 @@
       ctx.moveTo(x, 0)
       ctx.lineTo(x, height)
       ctx.stroke()
-      const pad = session.padSlices.indexOf(i)
+      const pad = padForSlice(i, session.padSlices, session.padSpans, own)
       if (pad >= 0) {
         ctx.fillStyle = color('--marker')
         ctx.fillRect(x, 0, 18, 16)
         ctx.fillStyle = '#111'
         ctx.fillText(String(pad + 1), x + 3, 12)
       }
+    })
+    session.padSpans.forEach((span, pad) => {
+      if (!span || span[0] < view.start || span[0] > view.end) return
+      const x = Math.round(xOfFrame(span[0])) + 0.5
+      ctx.strokeStyle = color('--marker')
+      ctx.strokeRect(x, height - 16.5, 18, 16)
+      ctx.fillStyle = color('--marker')
+      ctx.fillText(String(pad + 1), x + 3, height - 4)
     })
   })
 
