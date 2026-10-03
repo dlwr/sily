@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { followMarkers, minSliceSeconds } from './markers'
+import { followMarkers, minSliceSeconds, padForSlice } from './markers'
 
 const identity = (n = 4) => Array.from({ length: n }, (_, i) => i)
 
@@ -42,5 +42,21 @@ describe('minSliceSeconds', () => {
 
   it('falls back to a short gap when the tempo is unknown', () => {
     expect(minSliceSeconds(null)).toBe(0.05)
+  })
+})
+
+describe('padForSlice', () => {
+  const none = [null, null, null]
+
+  it('names the pad that plays the slice', () => {
+    expect(padForSlice(1, [0, 1, 2], none, [false, false, false])).toBe(1)
+  })
+
+  it('skips a pad that plays a span instead of its slice', () => {
+    expect(padForSlice(1, [0, 1, 1], [null, [0, 10], null], [false, false, false])).toBe(2)
+  })
+
+  it('skips a pad that plays its own sample', () => {
+    expect(padForSlice(1, [0, 1, 2], none, [false, true, false])).toBe(-1)
   })
 })

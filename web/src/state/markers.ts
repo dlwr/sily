@@ -19,3 +19,6 @@ const UNKNOWN_TEMPO_SECONDS = 0.05
 
 export const minSliceSeconds = (bpm: number | null): number =>
   bpm ? (SLACK * 60) / bpm / SIXTEENTHS_PER_BEAT : UNKNOWN_TEMPO_SECONDS
+
+export const padForSlice = (slice: number, padSlices: number[], spans: ([number, number] | null)[], own: boolean[]): number =>
+  padSlices.findIndex((s, pad) => s === slice && !spans[pad] && !own[pad])
