@@ -1,4 +1,5 @@
 import { mixdown, Sily, type Capture } from '../audio/client'
+import { isSilent } from '../audio/level'
 import type { ToWorklet } from '../audio/messages'
 import { arrangePads, remapEvents, roleOf, type Category } from '../classify/categories'
 import { buildKit, dropUnplacedEvents, UPPER_PADS, type KitCandidate } from '../classify/kit'
@@ -631,8 +632,15 @@ export class Session {
   private finishCapture() {
     if (!this.capture) return
     const { left, right } = this.capture.stop()
+    const display = this.capturing === 'display'
     this.capture = null
     this.capturing = null
+    if (left.length > 0 && isSilent([left, right])) {
+      this.message = display
+        ? '録れた音が無音だった。音を出しているアプリやタブが共有の対象に入っているか確かめてほしい（Chrome のタブで流しているなら、そのタブを選んで「タブの音声も共有」をオンにする）'
+        : '録れた音が無音だった。入力デバイスに音が来ているか確かめてほしい'
+      return
+    }
     if (left.length > 0) {
       this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
       this.buildFromSource()
