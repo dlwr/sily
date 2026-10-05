@@ -11,6 +11,9 @@
     four_on_floor: '4つ打ち',
     trap: 'トラップ',
     drum_and_bass: 'ドラムンベース',
+    dembow: 'レゲトン',
+    uk_garage: 'UK ガラージ',
+    jersey_club: 'ジャージークラブ',
   }
   const styles: { value: StyleChoice; label: string }[] = [
     { value: 'auto', label: 'BPM に合わせる' },

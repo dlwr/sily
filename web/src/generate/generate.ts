@@ -1,7 +1,7 @@
 import type { Category } from '../classify/categories'
 import type { PadEvent } from '../state/pattern'
 
-export type Style = 'boom_bap' | 'dilla' | 'breakbeat' | 'four_on_floor' | 'trap' | 'drum_and_bass'
+export type Style = 'boom_bap' | 'dilla' | 'breakbeat' | 'four_on_floor' | 'trap' | 'drum_and_bass' | 'dembow' | 'uk_garage' | 'jersey_club'
 export type StyleChoice = Style | 'auto'
 export type PadInfo = { pad: number; category: Category; beats: number; scores: Partial<Record<Category, number>> }
 export type GenerateInput = {
@@ -144,6 +144,48 @@ const TEMPLATES: Record<Style, Template> = {
     bassOnKick: true,
     drift: { snare: { lean: 0.01, spread: 0.008 }, hat: { lean: 0, spread: 0.01 } },
   },
+  dembow: {
+    lanes: {
+      kick: { probabilities: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], velocity: 1 },
+      snare: { probabilities: [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0], velocity: 0.9 },
+      hat: { probabilities: [0.9, 0, 0.9, 0, 0.9, 0, 0.9, 0, 0.9, 0, 0.9, 0, 0.9, 0, 0.9, 0.2], velocity: 0.5 },
+      open_hat: { probabilities: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.2], velocity: 0.55 },
+      perc: { probabilities: [0, 0, 0.2, 0, 0, 0, 0, 0.15, 0, 0, 0.2, 0, 0, 0, 0, 0.15], velocity: 0.6 },
+      bass: { probabilities: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], velocity: 0.9, pitches: [0, 0, 5, 7, -2] },
+      upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, 3, 5, 7] },
+    },
+    swing: 0.5,
+    bassOnKick: true,
+    drift: { snare: { lean: 0, spread: 0.008 } },
+  },
+  uk_garage: {
+    lanes: {
+      kick: { probabilities: [1, 0, 0, 0, 0, 0, 0, 0.2, 0, 0, 1, 0, 0, 0, 0, 0.15], velocity: 1 },
+      snare: { probabilities: [0, 0, 0, 0, 1, 0, 0, 0.1, 0, 0, 0, 0, 1, 0, 0, 0.15], velocity: 0.9 },
+      hat: { probabilities: [0.2, 0.3, 0.95, 0.3, 0.2, 0.3, 0.95, 0.3, 0.2, 0.3, 0.95, 0.3, 0.2, 0.3, 0.95, 0.3], velocity: 0.5 },
+      open_hat: { probabilities: [0, 0, 0.3, 0, 0, 0, 0, 0, 0, 0, 0.3, 0, 0, 0, 0, 0], velocity: 0.55 },
+      perc: { probabilities: [0, 0, 0, 0.2, 0, 0, 0, 0, 0, 0.2, 0, 0, 0, 0, 0.15, 0], velocity: 0.55 },
+      bass: { probabilities: [1, 0, 0, 0.3, 0, 0, 0.5, 0, 0, 0, 0.6, 0, 0, 0.3, 0, 0], velocity: 0.9, pitches: [0, 0, 3, 5, 7, -2] },
+      upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, 3, 7, 10] },
+    },
+    swing: 0.64,
+    bassOnKick: false,
+    drift: { snare: { lean: 0.005, spread: 0.008 }, hat: { lean: 0, spread: 0.01 } },
+  },
+  jersey_club: {
+    lanes: {
+      kick: { probabilities: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], velocity: 1 },
+      snare: { probabilities: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0.2], velocity: 0.9 },
+      hat: { probabilities: [0, 0, 0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, 0], velocity: 0.5 },
+      open_hat: { probabilities: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], velocity: 0.5 },
+      perc: { probabilities: [0, 0, 0, 0.3, 0, 0, 0, 0.3, 0, 0, 0, 0.3, 0, 0, 0, 0.3], velocity: 0.6 },
+      bass: { probabilities: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], velocity: 0.9, pitches: [0, 0, 0, 5, 7] },
+      upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, 5, 7, 12] },
+    },
+    swing: 0.5,
+    bassOnKick: true,
+    drift: { hat: { lean: 0, spread: 0.005 } },
+  },
 }
 
 const TEMPOS: Record<Style, { low: number; high: number; center: number }> = {
@@ -153,6 +195,9 @@ const TEMPOS: Record<Style, { low: number; high: number; center: number }> = {
   four_on_floor: { low: 112, high: 135, center: 124 },
   trap: { low: 130, high: 165, center: 145 },
   drum_and_bass: { low: 160, high: 185, center: 174 },
+  dembow: { low: 90, high: 102, center: 96 },
+  uk_garage: { low: 128, high: 136, center: 132 },
+  jersey_club: { low: 135, high: 145, center: 140 },
 }
 
 export const candidateStyles = (choice: StyleChoice, bpm: number, count: number): Style[] => {
