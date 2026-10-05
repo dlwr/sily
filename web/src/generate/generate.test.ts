@@ -189,6 +189,24 @@ describe('generate', () => {
     })
   })
 
+  it('puts the trap snare on beat three only', () => {
+    const snares = on(generate(input({ style: 'trap', looseness: 0 })), 1).map((e) => e.beat)
+    expect([snares.includes(2), snares.includes(1), snares.includes(3)]).toEqual([true, false, false])
+  })
+
+  it('rolls trap hats faster than sixteenths', () => {
+    const hats = [1, 2, 3, 4, 5, 6, 7, 8].flatMap((seed) => on(generate(input({ seed, style: 'trap', density: 1, looseness: 0 })), 2))
+    expect(hats.some((e) => !Number.isInteger(e.beat * 4))).toBe(true)
+  })
+
+  it('plays the drum and bass two step', () => {
+    const events = generate(input({ style: 'drum_and_bass', looseness: 0 }))
+    expect([on(events, 0).map((e) => e.beat), on(events, 1).map((e) => e.beat)]).toEqual([
+      expect.arrayContaining([0, 2.5]),
+      expect.arrayContaining([1, 3]),
+    ])
+  })
+
   describe('stand-ins for missing core parts', () => {
     const tom: PadInfo = { pad: 5, category: 'tom', beats: 0.4, scores: { tom: 0.5, kick: 0.4 } }
     const shaker: PadInfo = { pad: 6, category: 'perc', beats: 0.2, scores: { perc: 0.6, kick: 0.05, closed_hat: 0.3 } }
@@ -244,8 +262,12 @@ describe('candidateStyles', () => {
     expect(candidateStyles('auto', 88, 4)).not.toContain('four_on_floor')
   })
 
-  it('plays breakbeat at jungle tempo', () => {
-    expect(candidateStyles('auto', 170, 4)).toEqual(['breakbeat', 'breakbeat', 'breakbeat', 'breakbeat'])
+  it('leads with trap at trap tempo', () => {
+    expect(candidateStyles('auto', 145, 4)[0]).toBe('trap')
+  })
+
+  it('leads with drum and bass at jungle tempo', () => {
+    expect(candidateStyles('auto', 174, 4)[0]).toBe('drum_and_bass')
   })
 
   it('falls back to the nearest style outside every range', () => {
