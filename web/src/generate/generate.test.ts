@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PadEvent } from '../state/pattern'
-import { generate, type GenerateInput, type PadInfo } from './generate'
+import { candidateStyles, generate, type GenerateInput, type PadInfo } from './generate'
 
 const kit: PadInfo[] = [
   { pad: 0, category: 'kick', beats: 0.5, scores: { kick: 0.9 } },
@@ -202,5 +202,31 @@ describe('generate', () => {
       const events = generate(input({ pads: noKick, existing: [manual(0.5, 5)] }))
       expect(on(events, 5)).toHaveLength(1)
     })
+  })
+})
+
+describe('candidateStyles', () => {
+  it('uses the chosen style for every candidate', () => {
+    expect(candidateStyles('dilla', 128, 4)).toEqual(['dilla', 'dilla', 'dilla', 'dilla'])
+  })
+
+  it('leads with four on the floor at house tempo', () => {
+    expect(candidateStyles('auto', 124, 4)[0]).toBe('four_on_floor')
+  })
+
+  it('spreads hip hop tempos over boom bap and dilla', () => {
+    expect(new Set(candidateStyles('auto', 88, 4))).toEqual(new Set(['boom_bap', 'dilla']))
+  })
+
+  it('leaves four on the floor out of hip hop tempos', () => {
+    expect(candidateStyles('auto', 88, 4)).not.toContain('four_on_floor')
+  })
+
+  it('plays breakbeat at jungle tempo', () => {
+    expect(candidateStyles('auto', 170, 4)).toEqual(['breakbeat', 'breakbeat', 'breakbeat', 'breakbeat'])
+  })
+
+  it('falls back to the nearest style outside every range', () => {
+    expect(candidateStyles('auto', 60, 2)).toEqual(['dilla', 'dilla'])
   })
 })

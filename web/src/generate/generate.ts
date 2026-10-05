@@ -2,6 +2,7 @@ import type { Category } from '../classify/categories'
 import type { PadEvent } from '../state/pattern'
 
 export type Style = 'boom_bap' | 'dilla' | 'breakbeat' | 'four_on_floor'
+export type StyleChoice = Style | 'auto'
 export type PadInfo = { pad: number; category: Category; beats: number; scores: Partial<Record<Category, number>> }
 export type GenerateInput = {
   pads: PadInfo[]
@@ -109,6 +110,24 @@ const TEMPLATES: Record<Style, Template> = {
     swing: 0.5,
     drift: { hat: { lean: 0, spread: 0.008 } },
   },
+}
+
+const TEMPOS: Record<Style, { low: number; high: number; center: number }> = {
+  boom_bap: { low: 80, high: 100, center: 90 },
+  dilla: { low: 70, high: 98, center: 84 },
+  breakbeat: { low: 100, high: 180, center: 130 },
+  four_on_floor: { low: 112, high: 135, center: 124 },
+}
+
+export const candidateStyles = (choice: StyleChoice, bpm: number, count: number): Style[] => {
+  if (choice !== 'auto') return Array(count).fill(choice)
+  const styles = Object.keys(TEMPOS) as Style[]
+  const outside = (style: Style) => Math.max(0, TEMPOS[style].low - bpm, bpm - TEMPOS[style].high)
+  const fitting = styles
+    .filter((style) => outside(style) === 0)
+    .sort((a, b) => Math.abs(bpm - TEMPOS[a].center) - Math.abs(bpm - TEMPOS[b].center))
+  const pool = fitting.length > 0 ? fitting : [styles.reduce((a, b) => (outside(b) < outside(a) ? b : a))]
+  return Array.from({ length: count }, (_, i) => pool[i % pool.length])
 }
 
 let sequence = 0
