@@ -207,6 +207,27 @@ describe('generate', () => {
     ])
   })
 
+  it('plays the dembow snare ahead of beats two and four', () => {
+    const snares = on(generate(input({ style: 'dembow', looseness: 0 })), 1).map((e) => e.beat)
+    expect(snares).toEqual(expect.arrayContaining([0.75, 1.5, 2.75, 3.5]))
+  })
+
+  it('skips the second kick of the uk garage two step', () => {
+    const kicks = on(generate(input({ style: 'uk_garage', looseness: 0 })), 0).map((e) => e.beat)
+    expect([kicks.includes(0), kicks.includes(2.5), kicks.includes(1)]).toEqual([true, true, false])
+  })
+
+  it('swings uk garage harder than boom bap', () => {
+    const offbeat = (style: 'uk_garage' | 'boom_bap') =>
+      Math.max(...on(generate(input({ style, density: 1, looseness: 1 })), 2).filter((e) => e.beat % 0.5 === 0.25).map((e) => e.nudge))
+    expect(offbeat('uk_garage')).toBeGreaterThan(offbeat('boom_bap'))
+  })
+
+  it('bounces the jersey club kick at the end of the bar', () => {
+    const kicks = on(generate(input({ style: 'jersey_club', looseness: 0 })), 0).map((e) => e.beat)
+    expect(kicks).toEqual(expect.arrayContaining([0, 1, 2, 2.75, 3.5]))
+  })
+
   describe('stand-ins for missing core parts', () => {
     const tom: PadInfo = { pad: 5, category: 'tom', beats: 0.4, scores: { tom: 0.5, kick: 0.4 } }
     const shaker: PadInfo = { pad: 6, category: 'perc', beats: 0.2, scores: { perc: 0.6, kick: 0.05, closed_hat: 0.3 } }
@@ -264,6 +285,18 @@ describe('candidateStyles', () => {
 
   it('leads with trap at trap tempo', () => {
     expect(candidateStyles('auto', 145, 4)[0]).toBe('trap')
+  })
+
+  it('leads with dembow at reggaeton tempo', () => {
+    expect(candidateStyles('auto', 96, 4)[0]).toBe('dembow')
+  })
+
+  it('leads with uk garage at garage tempo', () => {
+    expect(candidateStyles('auto', 132, 4)[0]).toBe('uk_garage')
+  })
+
+  it('leads with jersey club at club tempo', () => {
+    expect(candidateStyles('auto', 140, 4)[0]).toBe('jersey_club')
   })
 
   it('leads with drum and bass at jungle tempo', () => {
