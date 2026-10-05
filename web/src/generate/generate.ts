@@ -23,6 +23,7 @@ type Lane = { probabilities: number[]; velocity: number; pitches?: number[] }
 type Template = {
   lanes: Partial<Record<Part, Lane>>
   swing: number
+  bassOnKick: boolean
   drift: Partial<Record<Part, { lean: number; spread: number }>>
 }
 
@@ -35,7 +36,7 @@ const ON_KICK = 0.7
 const FILL_FLOOR = 0.12
 const PARTS: Part[] = ['kick', 'snare', 'hat', 'open_hat', 'perc', 'bass', 'upper']
 const MELODIC_PARTS: Part[] = ['bass', 'upper']
-const FILL_PARTS: Part[] = ['snare', 'perc']
+const GHOST_PARTS: Part[] = ['snare', 'perc']
 const CORE_PARTS: Part[] = ['kick', 'snare', 'hat']
 const PROTECTED_PARTS: Part[] = [...CORE_PARTS, 'bass', 'upper']
 
@@ -63,6 +64,7 @@ const TEMPLATES: Record<Style, Template> = {
       upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, 3, 5, -2] },
     },
     swing: 0.58,
+    bassOnKick: true,
     drift: { hat: { lean: 0, spread: 0.01 } },
   },
   dilla: {
@@ -76,6 +78,7 @@ const TEMPLATES: Record<Style, Template> = {
       upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, -2, 3, 5, 7, 10] },
     },
     swing: 0.62,
+    bassOnKick: true,
     drift: {
       kick: { lean: 0, spread: 0.06 },
       snare: { lean: 0.025, spread: 0.01 },
@@ -95,6 +98,7 @@ const TEMPLATES: Record<Style, Template> = {
       upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, 5, 7, 12] },
     },
     swing: 0.54,
+    bassOnKick: true,
     drift: { snare: { lean: 0, spread: 0.01 }, hat: { lean: 0, spread: 0.01 } },
   },
   four_on_floor: {
@@ -108,6 +112,7 @@ const TEMPLATES: Record<Style, Template> = {
       upper: { probabilities: STAB, velocity: 0.75, pitches: [0, 0, 5, 7] },
     },
     swing: 0.5,
+    bassOnKick: false,
     drift: { hat: { lean: 0, spread: 0.008 } },
   },
 }
@@ -185,7 +190,7 @@ export const generate = (input: GenerateInput): PadEvent[] => {
     chosen.set(part, { info: best, standIn: true })
   }
 
-  const followsKick = (part: Part) => part === 'bass' && chosen.has('kick')
+  const followsKick = (part: Part) => part === 'bass' && template.bassOnKick && chosen.has('kick')
   const rolled = PARTS.filter((part) => {
     const pick = chosen.get(part)
     const lane = template.lanes[part]
@@ -200,7 +205,7 @@ export const generate = (input: GenerateInput): PadEvent[] => {
 
   const hit = (part: Part, lane: Lane, step: number, p: number, pitch: number): Hit => ({
     step,
-    velocity: Math.min(1, lane.velocity * (p >= CERTAIN ? 1 : 0.45 + 0.5 * p) * (step % 4 === 0 ? 1 : 0.85) * (0.9 + rand() * 0.1)),
+    velocity: Math.min(1, lane.velocity * (GHOST_PARTS.includes(part) && p < CERTAIN ? 0.45 + 0.5 * p : 1) * (step % 4 === 0 ? 1 : 0.85) * (0.9 + rand() * 0.1)),
     nudge: input.looseness === 0 ? 0 : swingShift(step) * input.looseness + nudgeFor(part),
     pitch,
   })
@@ -214,9 +219,10 @@ export const generate = (input: GenerateInput): PadEvent[] => {
         !melodic || step === 0 ? 0 : (base?.get(part)?.find((h) => h.step === step)?.pitch ?? pitchFor(lane))
       const hits: Hit[] = []
       if (followsKick(part)) {
-        for (const kick of bar.get('kick') ?? []) {
+        const kicks = bar.get('kick') ?? []
+        for (const kick of kicks) {
           const pickup = kick.step - 1
-          if (pickup >= from && rand() < scaled(PICKUP, input.density)) hits.push(hit(part, lane, pickup, PICKUP, pitchAt(pickup)))
+          if (pickup >= from && !kicks.some((k) => k.step === pickup) && rand() < scaled(PICKUP, input.density)) hits.push(hit(part, lane, pickup, PICKUP, pitchAt(pickup)))
           if (kick.step === 0 || rand() < scaled(ON_KICK, input.density)) {
             hits.push({ ...hit(part, lane, kick.step, 1, pitchAt(kick.step)), nudge: kick.nudge })
           }
@@ -224,7 +230,7 @@ export const generate = (input: GenerateInput): PadEvent[] => {
       } else {
         for (let step = from; step < STEPS; step++) {
           const written = lane.probabilities[step]
-          const p = base && FILL_PARTS.includes(part) && written < CERTAIN ? Math.max(written * 1.5, FILL_FLOOR) : written
+          const p = base && GHOST_PARTS.includes(part) && written < CERTAIN ? Math.max(written * 1.5, FILL_FLOOR) : written
           if (rand() < scaled(p, input.density)) hits.push(hit(part, lane, step, p, pitchAt(step)))
         }
       }
