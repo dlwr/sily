@@ -4,8 +4,11 @@
 
   let { session }: { session: Session } = $props()
 
+  const SHORT_SECONDS = 8
+
   const speed = $derived(session.sourceSpeed)
   const semitones = $derived(rateToSemitones(speed.rate))
+  const short = $derived(session.sample !== null && session.sample.left.length < SHORT_SECONDS * session.sampleRate)
   const presets = [
     { label: '45→33', rate: 100 / 3 / 45 },
     { label: '等速', rate: 1 },
@@ -44,10 +47,16 @@
     <span class="muted num">元の BPM {session.sourceBpm}</span>
     <button onclick={() => session.scaleSourceBpm(2)} title="推定が半分にずれていたら直す。切り直してキットを組み直す">×2</button>
     <button onclick={() => session.scaleSourceBpm(0.5)} title="推定が倍にずれていたら直す。切り直してキットを組み直す">÷2</button>
+    {#if short}<span class="hint">8秒より短い録音は BPM が半分に出やすい。速い曲なら ×2 を確かめて</span>{/if}
   {/if}
 </div>
 
 <style>
+  .hint {
+    color: var(--accent);
+    font-size: 12px;
+  }
+
   .speed {
     display: flex;
     flex-wrap: wrap;
