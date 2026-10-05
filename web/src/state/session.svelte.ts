@@ -22,7 +22,7 @@ import {
   type ProjectDoc,
 } from '../storage/projects'
 import { untrack } from 'svelte'
-import { generate, type PadInfo, type Style } from '../generate/generate'
+import { candidateStyles, generate, type PadInfo, type Style, type StyleChoice } from '../generate/generate'
 import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { uploadCorrection } from '../corrections/upload'
@@ -140,10 +140,10 @@ export class Session {
   correctionLogin = $state(false)
   correctionsSent = $state(0)
   correctionsUnsent = $state(0)
-  style = $state<Style>('boom_bap')
+  style = $state<StyleChoice>('auto')
   density = $state(0.5)
   looseness = $state(0.5)
-  candidates = $state<PadEvent[][]>([])
+  candidates = $state<{ style: Style; events: PadEvent[] }[]>([])
   previewing = $state<number | null>(null)
   refining = $state(false)
   processing = $state(0)
@@ -1225,17 +1225,18 @@ export class Session {
     if (!this.beforeGenerate) this.checkpoint()
     this.beforeGenerate ??= this.events
     const base = Math.floor(Math.random() * 1e9)
-    this.candidates = Array.from({ length: CANDIDATES }, (_, i) =>
-      generate({
+    this.candidates = candidateStyles(this.style, this.bpm, CANDIDATES).map((style, i) => ({
+      style,
+      events: generate({
         pads,
         existing: this.beforeGenerate!,
-        style: this.style,
+        style,
         density: this.density,
         looseness: this.looseness,
         lengthBeats: this.patternBeats,
         seed: base + i,
       }),
-    )
+    }))
     this.preview(0)
   }
 
@@ -1244,7 +1245,7 @@ export class Session {
     if (!candidate) return
     this.previewing = index
     const before = this.heardNow()
-    this.events = candidate
+    this.events = candidate.events
     this.queueEvents(before)
   }
 
