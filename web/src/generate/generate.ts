@@ -1,7 +1,7 @@
 import type { Category } from '../classify/categories'
 import type { PadEvent } from '../state/pattern'
 
-export type Style = 'boom_bap' | 'dilla' | 'breakbeat' | 'four_on_floor'
+export type Style = 'boom_bap' | 'dilla' | 'breakbeat' | 'four_on_floor' | 'trap' | 'drum_and_bass'
 export type StyleChoice = Style | 'auto'
 export type PadInfo = { pad: number; category: Category; beats: number; scores: Partial<Record<Category, number>> }
 export type GenerateInput = {
@@ -18,7 +18,7 @@ type Part = 'kick' | 'snare' | 'hat' | 'open_hat' | 'perc' | 'bass' | 'upper'
 
 type Hit = { step: number; velocity: number; nudge: number; pitch: number }
 
-type Lane = { probabilities: number[]; velocity: number; pitches?: number[] }
+type Lane = { probabilities: number[]; velocity: number; pitches?: number[]; roll?: number }
 
 type Template = {
   lanes: Partial<Record<Part, Lane>>
@@ -34,6 +34,7 @@ const LONG_SLICE_BEATS = 1
 const PICKUP = 0.15
 const ON_KICK = 0.7
 const FILL_FLOOR = 0.12
+const ROLL_DECAY = 0.2
 const PARTS: Part[] = ['kick', 'snare', 'hat', 'open_hat', 'perc', 'bass', 'upper']
 const MELODIC_PARTS: Part[] = ['bass', 'upper']
 const GHOST_PARTS: Part[] = ['snare', 'perc']
@@ -115,6 +116,34 @@ const TEMPLATES: Record<Style, Template> = {
     bassOnKick: false,
     drift: { hat: { lean: 0, spread: 0.008 } },
   },
+  trap: {
+    lanes: {
+      kick: { probabilities: [1, 0, 0, 0.2, 0, 0, 0.6, 0, 0, 0, 0.75, 0.3, 0, 0, 0.2, 0], velocity: 1 },
+      snare: { probabilities: [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0.1], velocity: 0.95 },
+      hat: { probabilities: [0.95, 0.3, 0.95, 0.3, 0.95, 0.3, 0.95, 0.3, 0.95, 0.3, 0.95, 0.3, 0.95, 0.3, 0.95, 0.3], velocity: 0.55, roll: 0.12 },
+      open_hat: { probabilities: [0, 0, 0, 0, 0, 0, 0.15, 0, 0, 0, 0, 0, 0, 0, 0, 0], velocity: 0.55 },
+      perc: { probabilities: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.15, 0, 0, 0], velocity: 0.55 },
+      bass: { probabilities: [1, 0, 0, 0.2, 0, 0, 0.6, 0, 0, 0, 0.75, 0.3, 0, 0, 0.2, 0], velocity: 0.95, pitches: [0, 0, 0, -2, 3, 5] },
+      upper: { probabilities: STAB, velocity: 0.8, pitches: [0, 0, 3, 7] },
+    },
+    swing: 0.5,
+    bassOnKick: true,
+    drift: { hat: { lean: 0, spread: 0.005 } },
+  },
+  drum_and_bass: {
+    lanes: {
+      kick: { probabilities: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0.2, 0], velocity: 1 },
+      snare: { probabilities: [0, 0, 0, 0, 1, 0, 0, 0.15, 0, 0.1, 0, 0, 1, 0, 0, 0.2], velocity: 0.95 },
+      hat: { probabilities: [0.95, 0.2, 0.95, 0.2, 0.95, 0.2, 0.95, 0.2, 0.95, 0.2, 0.95, 0.2, 0.95, 0.2, 0.95, 0.2], velocity: 0.5 },
+      open_hat: { probabilities: [0, 0, 0, 0, 0, 0, 0.2, 0, 0, 0, 0, 0, 0, 0, 0, 0], velocity: 0.55 },
+      perc: { probabilities: [0, 0.1, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0.1, 0, 0], velocity: 0.5 },
+      bass: { probabilities: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0.2, 0], velocity: 0.9, pitches: [0, 0, 0, 5, 7, -2] },
+      upper: { probabilities: STAB, velocity: 0.75, pitches: [0, 0, 5, 7] },
+    },
+    swing: 0.52,
+    bassOnKick: true,
+    drift: { snare: { lean: 0.01, spread: 0.008 }, hat: { lean: 0, spread: 0.01 } },
+  },
 }
 
 const TEMPOS: Record<Style, { low: number; high: number; center: number }> = {
@@ -122,6 +151,8 @@ const TEMPOS: Record<Style, { low: number; high: number; center: number }> = {
   dilla: { low: 70, high: 98, center: 84 },
   breakbeat: { low: 100, high: 180, center: 130 },
   four_on_floor: { low: 112, high: 135, center: 124 },
+  trap: { low: 130, high: 165, center: 145 },
+  drum_and_bass: { low: 160, high: 185, center: 174 },
 }
 
 export const candidateStyles = (choice: StyleChoice, bpm: number, count: number): Style[] => {
@@ -231,7 +262,14 @@ export const generate = (input: GenerateInput): PadEvent[] => {
         for (let step = from; step < STEPS; step++) {
           const written = lane.probabilities[step]
           const p = base && GHOST_PARTS.includes(part) && written < CERTAIN ? Math.max(written * 1.5, FILL_FLOOR) : written
-          if (rand() < scaled(p, input.density)) hits.push(hit(part, lane, step, p, pitchAt(step)))
+          if (rand() >= scaled(p, input.density)) continue
+          hits.push(hit(part, lane, step, p, pitchAt(step)))
+          if (!lane.roll || rand() >= scaled(lane.roll, input.density)) continue
+          const divisions = rand() < 0.5 ? 2 : 3
+          for (let k = 1; k < divisions; k++) {
+            const roll = hit(part, lane, step + k / divisions, p, 0)
+            hits.push({ ...roll, velocity: roll.velocity * (1 - k * ROLL_DECAY) })
+          }
         }
       }
       bar.set(part, hits)

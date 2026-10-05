@@ -9,6 +9,8 @@
     dilla: 'ヨレ（Dilla）',
     breakbeat: 'ブレイクビーツ',
     four_on_floor: '4つ打ち',
+    trap: 'トラップ',
+    drum_and_bass: 'ドラムンベース',
   }
   const styles: { value: StyleChoice; label: string }[] = [
     { value: 'auto', label: 'BPM に合わせる' },
