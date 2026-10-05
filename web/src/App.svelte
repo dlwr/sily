@@ -142,7 +142,16 @@
           </span>
         {/if}
         {#if session.processing > 0}<span class="muted">ストレッチを計算中…</span>{/if}
-        {#if session.refining}<span class="muted">音を聞き分け中（初回はモデルを読み込むので少し待つ）</span>{/if}
+        {#if session.refining}
+          {@const download = session.modelDownload}
+          {#if download && download.loaded < download.total}
+            <span class="muted num">モデルを読み込み中 {(download.loaded / 1e6).toFixed(0)} / {(download.total / 1e6).toFixed(0)} MB</span>
+            <progress value={download.loaded} max={download.total}></progress>
+          {:else}
+            <span class="muted num">音を聞き分け中 {session.refined} / {session.refineTotal}</span>
+            <progress value={session.refined} max={session.refineTotal}></progress>
+          {/if}
+        {/if}
         {#if session.message}<span class="error">{session.message}</span>{/if}
       </div>
       <Waveform {session} />
@@ -201,6 +210,27 @@
     align-items: baseline;
     gap: 12px;
     margin-bottom: 8px;
+  }
+
+  progress {
+    align-self: center;
+    width: 160px;
+    height: 4px;
+    appearance: none;
+    border: 0;
+    background: var(--surface-2);
+  }
+
+  progress::-webkit-progress-bar {
+    background: var(--surface-2);
+  }
+
+  progress::-webkit-progress-value {
+    background: var(--accent);
+  }
+
+  progress::-moz-progress-bar {
+    background: var(--accent);
   }
 
   h2 {

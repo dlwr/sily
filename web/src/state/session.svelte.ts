@@ -5,7 +5,7 @@ import { arrangePads, remapEvents, roleOf, type Category } from '../classify/cat
 import { buildKit, dropUnplacedEvents, UPPER_PADS, type KitCandidate } from '../classify/kit'
 import { beatGrid, phraseRanges, pickPhrases, type PhraseCandidate } from '../classify/phrases'
 import { sliceQuality } from '../classify/quality'
-import { ClapClient } from '../classify/clapClient'
+import { ClapClient, type ModelDownload } from '../classify/clapClient'
 import { resample } from '../classify/clap'
 import { probeScores, type Probe } from '../classify/probe'
 import probe from '../classify/probe.json'
@@ -146,6 +146,9 @@ export class Session {
   candidates = $state<{ style: Style; events: PadEvent[] }[]>([])
   previewing = $state<number | null>(null)
   refining = $state(false)
+  refined = $state(0)
+  refineTotal = $state(0)
+  modelDownload = $state<ModelDownload | null>(null)
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
   library = $state<SampleMeta[]>([])
@@ -160,7 +163,7 @@ export class Session {
   private saveTimer: ReturnType<typeof setTimeout> | undefined
   private pendingSave: string | null = null
   private beforeGenerate: PadEvent[] | null = null
-  private clap = new ClapClient()
+  private clap = new ClapClient((download) => (this.modelDownload = download))
   private refineGeneration = 0
   private phraseToken = 0
 
@@ -1330,8 +1333,11 @@ export class Session {
       end: this.markers[slice + 1] ?? sample.left.length,
     })).filter(({ start, end }) => end > start)
     this.refining = true
+    this.refined = 0
+    this.refineTotal = targets.length
     try {
-      for (const { start, end } of targets) {
+      for (const [i, { start, end }] of targets.entries()) {
+        this.refined = i
         const key = `${start}:${end}`
         let embedding = this.embeddings.get(key)
         if (!embedding) {
