@@ -152,6 +152,28 @@ describe('generate', () => {
       expect(offKick).toEqual([])
     })
 
+    it('keeps the four on the floor bass off the kick', () => {
+      const onKick = seeds.flatMap((seed) => {
+        const events = generate(input({ seed, style: 'four_on_floor', pads: [...kit, bass], density: 0.8, looseness: 0 }))
+        const kicks = on(events, 0).map((e) => e.beat)
+        return on(events, 4).filter((e) => kicks.includes(e.beat))
+      })
+      expect(onKick).toEqual([])
+    })
+
+    it('never plays two bass notes at once', () => {
+      const doubled = seeds.some((seed) => {
+        const beats = on(generate(input({ seed, style: 'breakbeat', pads: [...kit, bass], density: 1 })), 4).map((e) => e.beat)
+        return new Set(beats).size !== beats.length
+      })
+      expect(doubled).toBe(false)
+    })
+
+    it('keeps an uncertain kick at full strength', () => {
+      const kicks = seeds.flatMap((seed) => on(generate(input({ seed, density: 1, looseness: 0 })), 0))
+      expect(kicks.filter((e) => e.beat === 2.5).every((e) => e.velocity > 0.75)).toBe(true)
+    })
+
     it('starts the bass on the root', () => {
       const first = seeds.map((seed) => on(generate(input({ seed, pads: [...kit, bass] })), 4).find((e) => e.beat === 0)?.pitch)
       expect(first.every((pitch) => pitch === 0)).toBe(true)
