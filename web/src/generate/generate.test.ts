@@ -104,6 +104,69 @@ describe('generate', () => {
     const beats = on(generate(input({ pads, density: 0.8 })), 4).map((e) => e.beat)
     expect(beats.length).toBeGreaterThan(1)
   })
+
+  describe('groove', () => {
+    const seeds = [1, 2, 3, 4, 5, 6, 7, 8]
+    const bass: PadInfo = { pad: 4, category: 'bass', beats: 0.4, scores: { bass: 0.9 } }
+    const key = (e: PadEvent, offset = 0) => `${e.pad}@${e.beat - offset}:${e.velocity}:${e.nudge}:${e.pitch}`
+    const within = (events: PadEvent[], from: number, to: number, offset = 0) =>
+      events.filter((e) => e.beat >= from && e.beat < to).map((e) => key(e, offset)).sort()
+
+    it('repeats the first bar until the last one', () => {
+      const repeated = seeds.map((seed) => {
+        const events = generate(input({ seed, lengthBeats: 16, density: 0.7 }))
+        return [4, 8].every((start) => JSON.stringify(within(events, start, start + 4, start)) === JSON.stringify(within(events, 0, 4)))
+      })
+      expect(repeated.every(Boolean)).toBe(true)
+    })
+
+    it('keeps the front half of the last bar and varies only its back half', () => {
+      const kept = seeds.map((seed) => {
+        const events = generate(input({ seed, lengthBeats: 8, density: 0.7 }))
+        return JSON.stringify(within(events, 4, 6, 4)) === JSON.stringify(within(events, 0, 2))
+      })
+      const varied = seeds.some((seed) => {
+        const events = generate(input({ seed, lengthBeats: 8, density: 0.7 }))
+        return JSON.stringify(within(events, 6, 8, 4)) !== JSON.stringify(within(events, 2, 4))
+      })
+      expect([kept.every(Boolean), varied]).toEqual([true, true])
+    })
+
+    it('plays ghost snares well under the backbeat', () => {
+      const snares = seeds.flatMap((seed) => on(generate(input({ seed, density: 1, looseness: 0 })), 1))
+      const ghosts = snares.filter((e) => e.beat !== 1 && e.beat !== 3)
+      expect(ghosts.length > 0 && ghosts.every((e) => e.velocity < 0.6)).toBe(true)
+    })
+
+    it('keeps the backbeat loud', () => {
+      const snares = seeds.flatMap((seed) => on(generate(input({ seed, looseness: 0 })), 1))
+      expect(snares.filter((e) => e.beat === 1 || e.beat === 3).every((e) => e.velocity > 0.8)).toBe(true)
+    })
+
+    it('locks a short bass to the kick', () => {
+      const offKick = seeds.flatMap((seed) => {
+        const events = generate(input({ seed, pads: [...kit, bass], density: 0.8, looseness: 0 }))
+        const kicks = on(events, 0).map((e) => e.beat)
+        return on(events, 4).filter((e) => !kicks.includes(e.beat) && !kicks.includes(e.beat + 0.25))
+      })
+      expect(offKick).toEqual([])
+    })
+
+    it('starts the bass on the root', () => {
+      const first = seeds.map((seed) => on(generate(input({ seed, pads: [...kit, bass] })), 4).find((e) => e.beat === 0)?.pitch)
+      expect(first.every((pitch) => pitch === 0)).toBe(true)
+    })
+
+    it('chokes the closed hat where the open hat plays', () => {
+      const clashes = seeds.flatMap((seed) => {
+        const events = generate(input({ seed, style: 'four_on_floor', density: 1, looseness: 0 }))
+        const open = on(events, 3).map((e) => e.beat)
+        return on(events, 2).filter((e) => open.includes(e.beat))
+      })
+      expect(clashes).toEqual([])
+    })
+  })
+
   describe('stand-ins for missing core parts', () => {
     const tom: PadInfo = { pad: 5, category: 'tom', beats: 0.4, scores: { tom: 0.5, kick: 0.4 } }
     const shaker: PadInfo = { pad: 6, category: 'perc', beats: 0.2, scores: { perc: 0.6, kick: 0.05, closed_hat: 0.3 } }

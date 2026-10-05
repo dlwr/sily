@@ -15,6 +15,8 @@ export type GenerateInput = {
 
 type Part = 'kick' | 'snare' | 'hat' | 'open_hat' | 'perc' | 'bass' | 'upper'
 
+type Hit = { step: number; velocity: number; nudge: number; pitch: number }
+
 type Lane = { probabilities: number[]; velocity: number; pitches?: number[] }
 
 type Template = {
@@ -27,6 +29,12 @@ const STEPS = 16
 const STEP_BEATS = 0.25
 const CERTAIN = 0.95
 const LONG_SLICE_BEATS = 1
+const PICKUP = 0.15
+const ON_KICK = 0.7
+const FILL_FLOOR = 0.12
+const PARTS: Part[] = ['kick', 'snare', 'hat', 'open_hat', 'perc', 'bass', 'upper']
+const MELODIC_PARTS: Part[] = ['bass', 'upper']
+const FILL_PARTS: Part[] = ['snare', 'perc']
 const CORE_PARTS: Part[] = ['kick', 'snare', 'hat']
 const PROTECTED_PARTS: Part[] = [...CORE_PARTS, 'bass', 'upper']
 
@@ -158,33 +166,66 @@ export const generate = (input: GenerateInput): PadEvent[] => {
     chosen.set(part, { info: best, standIn: true })
   }
 
-  for (const [part, { info, standIn }] of chosen) {
+  const followsKick = (part: Part) => part === 'bass' && chosen.has('kick')
+  const rolled = PARTS.filter((part) => {
+    const pick = chosen.get(part)
     const lane = template.lanes[part]
-    if (!lane) continue
-    const melodic = part === 'bass' || part === 'upper'
-    if (melodic && info.beats > LONG_SLICE_BEATS) {
-      const every = Math.max(4, Math.ceil(info.beats / 4) * 4)
-      for (let beat = 0; beat < input.lengthBeats; beat += every) {
-        events.push({ id: nextId(), beat, pad: info.pad, velocity: lane.velocity, nudge: 0, pitch: 0, auto: true, standIn })
-      }
-      continue
+    if (!pick || !lane) return false
+    if (!MELODIC_PARTS.includes(part) || pick.info.beats <= LONG_SLICE_BEATS) return true
+    const every = Math.max(4, Math.ceil(pick.info.beats / 4) * 4)
+    for (let beat = 0; beat < input.lengthBeats; beat += every) {
+      events.push({ id: nextId(), beat, pad: pick.info.pad, velocity: lane.velocity, nudge: 0, pitch: 0, auto: true, standIn: pick.standIn })
     }
-    for (let bar = 0; bar < bars; bar++) {
-      lane.probabilities.forEach((p, step) => {
-        if (rand() >= scaled(p, input.density)) return
-        const beat = bar * 4 + step * STEP_BEATS
-        const accent = step % 4 === 0 ? 1 : 0.85
-        events.push({
-          id: nextId(),
-          beat,
-          pad: info.pad,
-          velocity: Math.min(1, lane.velocity * accent * (0.9 + rand() * 0.1)),
-          nudge: input.looseness === 0 ? 0 : swingShift(step) * input.looseness + nudgeFor(part),
-          pitch: melodic ? pitchFor(lane) : 0,
-          auto: true,
-          standIn,
-        })
-      })
+    return false
+  })
+
+  const hit = (part: Part, lane: Lane, step: number, p: number, pitch: number): Hit => ({
+    step,
+    velocity: Math.min(1, lane.velocity * (p >= CERTAIN ? 1 : 0.45 + 0.5 * p) * (step % 4 === 0 ? 1 : 0.85) * (0.9 + rand() * 0.1)),
+    nudge: input.looseness === 0 ? 0 : swingShift(step) * input.looseness + nudgeFor(part),
+    pitch,
+  })
+
+  const roll = (from: number, base?: Map<Part, Hit[]>) => {
+    const bar = new Map<Part, Hit[]>()
+    for (const part of rolled) {
+      const lane = template.lanes[part]!
+      const melodic = MELODIC_PARTS.includes(part)
+      const pitchAt = (step: number) =>
+        !melodic || step === 0 ? 0 : (base?.get(part)?.find((h) => h.step === step)?.pitch ?? pitchFor(lane))
+      const hits: Hit[] = []
+      if (followsKick(part)) {
+        for (const kick of bar.get('kick') ?? []) {
+          const pickup = kick.step - 1
+          if (pickup >= from && rand() < scaled(PICKUP, input.density)) hits.push(hit(part, lane, pickup, PICKUP, pitchAt(pickup)))
+          if (kick.step === 0 || rand() < scaled(ON_KICK, input.density)) {
+            hits.push({ ...hit(part, lane, kick.step, 1, pitchAt(kick.step)), nudge: kick.nudge })
+          }
+        }
+      } else {
+        for (let step = from; step < STEPS; step++) {
+          const written = lane.probabilities[step]
+          const p = base && FILL_PARTS.includes(part) && written < CERTAIN ? Math.max(written * 1.5, FILL_FLOOR) : written
+          if (rand() < scaled(p, input.density)) hits.push(hit(part, lane, step, p, pitchAt(step)))
+        }
+      }
+      bar.set(part, hits)
+    }
+    const open = new Set((bar.get('open_hat') ?? []).map((h) => h.step))
+    bar.set('hat', (bar.get('hat') ?? []).filter((h) => !open.has(h.step)))
+    return bar
+  }
+
+  const base = roll(0)
+  const fill = bars > 1 ? roll(STEPS / 2, base) : null
+  for (let b = 0; b < bars; b++) {
+    const last = fill && b === bars - 1
+    for (const part of rolled) {
+      const { info, standIn } = chosen.get(part)!
+      const hits = last ? [...base.get(part)!.filter((h) => h.step < STEPS / 2), ...fill.get(part)!] : base.get(part)!
+      for (const h of hits) {
+        events.push({ id: nextId(), beat: b * 4 + h.step * STEP_BEATS, pad: info.pad, velocity: h.velocity, nudge: h.nudge, pitch: h.pitch, auto: true, standIn })
+      }
     }
   }
   return [...manual, ...events]
