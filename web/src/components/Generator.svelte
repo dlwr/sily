@@ -1,14 +1,18 @@
 <script lang="ts">
-  import type { Style } from '../generate/generate'
+  import type { Style, StyleChoice } from '../generate/generate'
   import type { Session } from '../state/session.svelte'
 
   let { session }: { session: Session } = $props()
 
-  const styles: { value: Style; label: string }[] = [
-    { value: 'boom_bap', label: 'ブーンバップ' },
-    { value: 'dilla', label: 'ヨレ（Dilla）' },
-    { value: 'breakbeat', label: 'ブレイクビーツ' },
-    { value: 'four_on_floor', label: '4つ打ち' },
+  const labels: Record<Style, string> = {
+    boom_bap: 'ブーンバップ',
+    dilla: 'ヨレ（Dilla）',
+    breakbeat: 'ブレイクビーツ',
+    four_on_floor: '4つ打ち',
+  }
+  const styles: { value: StyleChoice; label: string }[] = [
+    { value: 'auto', label: 'BPM に合わせる' },
+    ...(Object.keys(labels) as Style[]).map((value) => ({ value, label: labels[value] })),
   ]
 
   const rows = (events: { pad: number }[]) => [...new Set(events.map((e) => e.pad))].sort((a, b) => a - b)
@@ -34,15 +38,16 @@
   {#if session.candidates.length > 0}
     <div class="candidates">
       {#each session.candidates as candidate, i}
-        {@const pads = rows(candidate)}
+        {@const pads = rows(candidate.events)}
         <button
           class="candidate"
           aria-pressed={session.previewing === i}
           onclick={() => session.preview(i)}
-          aria-label="候補 {i + 1}"
+          aria-label="候補 {i + 1}（{labels[candidate.style]}）"
+          title={labels[candidate.style]}
         >
           <svg viewBox="0 0 {session.patternBeats * 4} {Math.max(1, pads.length)}" preserveAspectRatio="none">
-            {#each candidate as e}
+            {#each candidate.events as e}
               <rect
                 x={Math.max(0, (e.beat + e.nudge) * 4)}
                 y={pads.indexOf(e.pad) + 0.15}
