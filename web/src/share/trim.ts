@@ -68,3 +68,45 @@ export const trimSource = <L>(input: TrimInput<L>): Trim<L> => {
     detached,
   }
 }
+
+export type BanksTrimInput<L = unknown> = {
+  bankPads: number
+  sources: ({ frames: number; maxFrames: number } | null)[]
+  banks: { markers: number[]; labels: Record<number, L> }[]
+  padSlices: number[]
+  padSpans: (Range | null)[]
+  ownPads: boolean[]
+}
+
+export type BanksTrim<L = unknown> = {
+  windows: (Range | null)[]
+  banks: { markers: number[]; labels: Record<number, L> }[]
+  padSlices: number[]
+  padSpans: (Range | null)[]
+  detached: { pad: number; range: Range }[]
+}
+
+export const trimBanks = <L>({ bankPads, sources, banks, padSlices, padSpans, ownPads }: BanksTrimInput<L>): BanksTrim<L> => {
+  const slices = [...padSlices]
+  const spans = [...padSpans]
+  const detached: BanksTrim<L>['detached'] = []
+  const trimmed = banks.map((bank, b) => {
+    const source = sources[b]
+    if (!source) return { bank, window: null }
+    const base = b * bankPads
+    const inBank = <T>(xs: T[]) => xs.slice(base, base + bankPads)
+    const trim = trimSource({
+      ...source,
+      markers: bank.markers,
+      labels: bank.labels,
+      padSlices: inBank(padSlices),
+      padSpans: inBank(padSpans),
+      ownPads: inBank(ownPads),
+    })
+    slices.splice(base, trim.padSlices.length, ...trim.padSlices)
+    spans.splice(base, trim.padSpans.length, ...trim.padSpans)
+    detached.push(...trim.detached.map(({ pad, range }) => ({ pad: base + pad, range })))
+    return { bank: { markers: trim.markers, labels: trim.labels }, window: [trim.start, trim.end] as Range }
+  })
+  return { windows: trimmed.map((t) => t.window), banks: trimmed.map((t) => t.bank), padSlices: slices, padSpans: spans, detached }
+}
