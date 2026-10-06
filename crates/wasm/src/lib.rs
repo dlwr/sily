@@ -83,6 +83,46 @@ pub extern "C" fn engine_trigger_note(slice: u32, semitones: f64, velocity: f32)
 }
 
 #[no_mangle]
+pub extern "C" fn engine_hold(pad: u32, velocity: f32, pitch: f64, time: f64) {
+    engine().hold(pad as usize, velocity, pitch, time);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_release(pad: u32) {
+    engine().release(pad as usize);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_release_all() {
+    engine().release_all();
+}
+
+#[no_mangle]
+pub extern "C" fn engine_repeat_count() -> u32 {
+    engine().repeats().len() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn engine_repeat_pad(i: u32) -> u32 {
+    engine().repeats()[i as usize].pad as u32
+}
+
+#[no_mangle]
+pub extern "C" fn engine_repeat_velocity(i: u32) -> f32 {
+    engine().repeats()[i as usize].velocity
+}
+
+#[no_mangle]
+pub extern "C" fn engine_repeat_pitch(i: u32) -> f64 {
+    engine().repeats()[i as usize].pitch
+}
+
+#[no_mangle]
+pub extern "C" fn engine_repeat_beat(i: u32) -> f64 {
+    engine().repeats()[i as usize].beat
+}
+
+#[no_mangle]
 pub extern "C" fn engine_audition(from_frame: i32) {
     engine().audition((from_frame >= 0).then_some(from_frame as usize));
 }
