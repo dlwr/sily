@@ -197,6 +197,7 @@ export class Session {
 
   focusBank(index: number) {
     if (index === this.focusedBank || !this.banks[index]) return
+    this.adopt()
     this.stopLabeling()
     this.stopAudition()
     this.focusedBank = index
