@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openStore } from './db'
-import { deleteProject, listProjects, loadProject, renameProject, saveProject, saveSource, type ProjectDoc } from './projects'
+import { deleteProject, deleteSource, listProjects, loadProject, renameProject, saveProject, saveSource, type ProjectDoc } from './projects'
 
 const doc = (id: string, name = id, ...sourceIds: (string | null)[]): ProjectDoc => ({
   id,
@@ -79,5 +79,12 @@ describe('projects', () => {
     await saveProject(doc('b', 'b', first, second))
     await deleteProject('a')
     expect((await loadProject('b'))!.sources).toEqual([null, null])
+  })
+
+  it('deletes source audio no project uses any more', async () => {
+    const sourceId = await saveSource(new Float32Array([0.1]), new Float32Array([0.1]), 44100)
+    await saveProject(doc('a', 'a', sourceId))
+    await deleteSource(sourceId)
+    expect((await loadProject('a'))!.sources).toEqual([null])
   })
 })
