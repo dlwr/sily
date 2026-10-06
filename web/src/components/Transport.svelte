@@ -20,6 +20,7 @@
       Rec <kbd>Enter</kbd>
     </button>
     <span class="num position">{position}</span>
+    {#if session.midiInputs.length}<span class="muted" title={session.midiInputs.join('\n')}>MIDI</span>{/if}
   </div>
   <label class="group">
     BPM

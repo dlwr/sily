@@ -38,6 +38,7 @@ import { frameAt } from './timing'
 import { uploadShare } from '../share/api'
 import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../share/limits'
 import { trimSource } from '../share/trim'
+import { noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
 
 export type PadSettings = {
   pitch: number
@@ -128,6 +129,7 @@ export class Session {
   strength = $state(0)
   swing = $state(0.5)
   keyboardMode = $state(false)
+  midiInputs = $state<string[]>([])
   beat = $state(0)
   auditionFrame = $state<number | null>(null)
   sensitivity = $state(0.5)
@@ -336,6 +338,7 @@ export class Session {
     }
     sily.onFailure = () => (this.message = 'オーディオ処理が停止した。ページを再読み込みしてほしい')
     this.sily = sily
+    this.connectMidi()
     this.refreshLibrary()
     this.syncTransport()
     this.syncGroove()
@@ -1626,14 +1629,44 @@ export class Session {
     }
   }
 
-  noteDown(note: number, timeStamp: number) {
+  noteDown(note: number, timeStamp: number, velocity = 1) {
     if (!this.sily) return
     const pad = this.selectedPad
     this.hits[pad] = performance.now()
-    this.sily.send({ type: 'note', slice: pad, semitones: note, velocity: 1 })
+    this.sily.send({ type: 'note', slice: pad, semitones: note, velocity })
     if (this.recording && this.playing) {
-      this.sily.send({ type: 'record', pad, velocity: 1, pitch: note, time: this.sily.audibleTime(timeStamp) })
+      this.sily.send({ type: 'record', pad, velocity, pitch: note, time: this.sily.audibleTime(timeStamp) })
     }
+  }
+
+  midiNoteDown(note: number, velocity: number, timeStamp: number) {
+    if (this.labelingSlice !== null) return
+    if (this.keyboardMode) return this.noteDown(semitonesForMidiNote(note), timeStamp, velocity)
+    const pad = padForMidiNote(note)
+    if (pad !== undefined) this.padDown(pad, timeStamp, velocity)
+  }
+
+  private async connectMidi() {
+    if (!navigator.requestMIDIAccess) return
+    let access: MIDIAccess
+    try {
+      access = await navigator.requestMIDIAccess()
+    } catch {
+      return
+    }
+    const listen = () => {
+      const names: string[] = []
+      access.inputs.forEach((input) => {
+        input.onmidimessage = (e) => {
+          const hit = e.data && noteOn(e.data)
+          if (hit) this.midiNoteDown(hit.note, hit.velocity, e.timeStamp)
+        }
+        if (input.state === 'connected') names.push(input.name ?? 'MIDI')
+      })
+      this.midiInputs = names
+    }
+    access.onstatechange = listen
+    listen()
   }
 
   setPad(pad: number, patch: Partial<PadSettings>) {
