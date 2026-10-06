@@ -156,11 +156,14 @@ class SilyProcessor extends AudioWorkletProcessor {
     }
     if (++this.blocks % TICK_EVERY === 0) {
       const frame = w.engine_audition_frame()
+      const meters = new Float32Array(w.memory.buffer, w.engine_meters(), w.engine_meter_count()).slice()
+      w.engine_reset_meters()
       this.post({
         type: 'tick',
         beat: w.engine_beat(),
         auditionFrame: frame < 0 ? null : frame,
         time: currentTime + frames / sampleRate,
+        meters,
       })
     }
     return true

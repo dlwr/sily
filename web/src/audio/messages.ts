@@ -28,6 +28,6 @@ export type ToWorklet =
   | { type: 'record'; pad: number; velocity: number; pitch: number; time: number }
 
 export type FromWorklet =
-  | { type: 'tick'; beat: number; auditionFrame: number | null; time: number }
+  | { type: 'tick'; beat: number; auditionFrame: number | null; time: number; meters: Float32Array }
   | { type: 'recorded'; pad: number; velocity: number; pitch: number; beat: number }
   | { type: 'repeated'; pad: number; velocity: number; pitch: number; beat: number }

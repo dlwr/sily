@@ -418,3 +418,18 @@ pub extern "C" fn engine_set_pad_comp(pad: u32, amount: f32) {
 pub extern "C" fn engine_set_glue(amount: f32) {
     engine().set_glue(amount);
 }
+
+#[no_mangle]
+pub extern "C" fn engine_meters() -> *const f32 {
+    engine().meters().as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn engine_meter_count() -> u32 {
+    engine().meters().len() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn engine_reset_meters() {
+    engine().reset_meters();
+}
