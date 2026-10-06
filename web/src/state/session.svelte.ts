@@ -763,8 +763,8 @@ export class Session {
     this.sily?.send({ type: 'load', source: bank.index, left: new Float32Array(0), right: new Float32Array(0) })
   }
 
-  private leads(bank: Bank) {
-    return this.banks.find((b) => b.sample) === bank
+  private isOnlySource(bank: Bank) {
+    return this.banks.every((b) => b === bank || !b.sample)
   }
 
   async loadFile(file: File) {
@@ -787,13 +787,13 @@ export class Session {
     const b = bank.index
     bank.sample = { name, left, right, mono: mixdown(left, right) }
     bank.sourceId = null
-    if (this.keyAuto && this.leads(bank)) this.key = estimateKey(this.sily.chroma(bank.sample.mono))
+    if (this.keyAuto && this.isOnlySource(bank)) this.key = estimateKey(this.sily.chroma(bank.sample.mono))
     bank.sourceSpeed = { mode: 'tape', rate: 1 }
     bank.sourceBpm = null
     bank.heldOut = false
     bank.splitByHash = null
     bank.kitPending = false
-    if (this.leads(bank)) this.playWhenBuilt = false
+    if (this.isOnlySource(bank)) this.playWhenBuilt = false
     this.loadEngineSample(bank, left, right, null)
     this.sily.send({ type: 'sourceRate', source: b, rate: 1 })
     this.adopt()
@@ -1633,11 +1633,11 @@ export class Session {
   }
 
   private buildFromSource(bank: Bank) {
-    if (this.leads(bank)) this.detectBpm(bank)
+    if (this.isOnlySource(bank)) this.detectBpm(bank)
     else this.estimateSourceBpm(bank)
     this.sliceByOnsets(bank)
     bank.kitPending = true
-    if (this.leads(bank)) this.playWhenBuilt = true
+    if (this.isOnlySource(bank)) this.playWhenBuilt = true
   }
 
   scaleSourceBpm(factor: number) {
@@ -1645,7 +1645,7 @@ export class Session {
     if (!bank.sample || !bank.sourceBpm) return
     this.checkpoint()
     bank.sourceBpm = Math.round(bank.sourceBpm * factor * 10) / 10
-    if (this.leads(bank)) {
+    if (this.isOnlySource(bank)) {
       this.bpm = Math.round(bank.sourceBpm * bank.sourceSpeed.rate * 10) / 10
       this.syncTransport()
       this.playWhenBuilt = true
@@ -1655,7 +1655,7 @@ export class Session {
   }
 
   private finishBuild(bank: Bank) {
-    if (!this.playWhenBuilt || !this.leads(bank)) return
+    if (!this.playWhenBuilt || !this.isOnlySource(bank)) return
     this.playWhenBuilt = false
     this.generateCandidates(bank)
     if (!this.playing && this.candidates.length > 0) this.togglePlaying()
