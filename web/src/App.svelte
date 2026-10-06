@@ -4,6 +4,7 @@
   import PadInspector from './components/PadInspector.svelte'
   import Pads from './components/Pads.svelte'
   import PatternGrid from './components/PatternGrid.svelte'
+  import Mixer from './components/Mixer.svelte'
   import SharedBanner from './components/SharedBanner.svelte'
   import SliceTools from './components/SliceTools.svelte'
   import SongBar from './components/SongBar.svelte'
@@ -18,6 +19,7 @@
 
   const session = new Session()
   let starting = $state(false)
+  let view = $state<'pattern' | 'mixer'>('pattern')
   let failed = $state('')
   const sharedId = sharedIdFrom(location.pathname)
   const sharedBytes = sharedId ? fetchShare(sharedId) : null
@@ -227,7 +229,11 @@
       <div class="pattern-area">
         <Generator {session} />
         <SongBar {session} />
-        <PatternGrid {session} />
+        <div class="views" role="tablist">
+          <button role="tab" aria-selected={view === 'pattern'} onclick={() => (view = 'pattern')}>パターン</button>
+          <button role="tab" aria-selected={view === 'mixer'} onclick={() => (view = 'mixer')}>ミキサー</button>
+        </div>
+        {#if view === 'mixer'}<Mixer {session} />{:else}<PatternGrid {session} />{/if}
       </div>
     </section>
   </main>
@@ -317,6 +323,26 @@
   .pattern-area {
     flex: 1;
     min-width: 320px;
+  }
+
+  .views {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .views button {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--muted);
+  }
+
+  .views button[aria-selected='true'] {
+    color: var(--text);
+    border-bottom-color: var(--accent);
   }
 
   .error {
