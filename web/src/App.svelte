@@ -10,6 +10,7 @@
   import SourceSpeed from './components/SourceSpeed.svelte'
   import Transport from './components/Transport.svelte'
   import BankTabs from './components/BankTabs.svelte'
+  import { BANK_NAMES } from './state/banks'
   import Waveform from './components/Waveform.svelte'
   import { labelForCode, noteForCode, padForCode } from './state/keymap'
   import { fetchShare, sharedIdFrom } from './share/api'
@@ -185,6 +186,11 @@
           <span class="muted num">
             {(session.bank.sample.left.length / session.sampleRate).toFixed(2)} 秒 / {Math.max(1, session.bank.markers.length)} スライス
           </span>
+        {/if}
+        {#if session.bank.sample}
+          <button onclick={() => confirm(`バンク ${BANK_NAMES[session.focusedBank]} を空にする？このバンクのパッドとノートも消える（取り消せない）`) && session.emptyBank()}>
+            バンクを空にする
+          </button>
         {/if}
         {#if session.processing > 0}<span class="muted">ストレッチを計算中…</span>{/if}
         {#if session.bank.refining}
