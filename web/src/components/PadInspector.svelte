@@ -1,5 +1,6 @@
 <script lang="ts">
   import { CATEGORIES, CATEGORY_LABELS, type Category } from '../classify/categories'
+  import { padName } from '../state/banks'
   import type { Session } from '../state/session.svelte'
   import PadFx from './PadFx.svelte'
   import PadLibrary from './PadLibrary.svelte'
@@ -13,7 +14,7 @@
 </script>
 
 <section>
-  <h2>パッド {session.selectedPad + 1}</h2>
+  <h2>パッド {padName(session.selectedPad)}</h2>
   <label>
     種類
     <select
