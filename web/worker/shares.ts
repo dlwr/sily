@@ -1,4 +1,5 @@
 import { strFromU8, unzipSync } from 'fflate'
+import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../src/share/limits.ts'
 
 export type ShareRecord = { id: string; name: string; bpm: number | null; createdAt: string }
 export type Limits = { since: string; perDay: number; total: number }
@@ -12,8 +13,6 @@ export type ShareStore = {
   body(id: string): Promise<ReadableStream | Uint8Array | null>
 }
 
-export const MAX_SHARE_BYTES = 20 * 1024 * 1024
-export const MAX_SOURCE_SECONDS = 15
 const PER_DAY = 3
 const TOTAL = 20
 
