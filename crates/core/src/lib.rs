@@ -5,4 +5,5 @@ pub mod lineage;
 pub mod features;
 pub mod classify;
 pub mod fx;
+pub mod sends;
 pub mod tonal;
