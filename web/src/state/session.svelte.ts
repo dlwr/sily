@@ -11,7 +11,7 @@ import { probeScores, type Probe } from '../classify/probe'
 import probe from '../classify/probe.json'
 import { DEFAULT_FX, isFlat, type FxSettings } from '../fx/fx'
 import { newId } from '../storage/db'
-import { pack, unpack, withFreshSampleIds, type Bundle } from '../storage/bundle'
+import { pack, unpack, withFreshSampleIds, type Bundle, type BundleSource } from '../storage/bundle'
 import { deleteSample, importSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
 import {
   deleteProject,
@@ -33,6 +33,7 @@ import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, recordRepeat,
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { Bank, type Label, type Sample } from './bank.svelte'
+import { readBanks, type BankState } from './banks'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
@@ -72,6 +73,7 @@ type Doc = {
 
 
 const PADS = 16
+const BANK_PADS = 16
 const LAST_PROJECT_KEY = 'sily.project'
 const SAVE_DELAY_MS = 800
 const freshPad = (): PadSettings => ({
@@ -359,7 +361,7 @@ export class Session {
   private projectState() {
     return $state.snapshot({
       name: this.projectName,
-      markers: this.bank.markers,
+      banks: this.banks.map(({ markers, labels, sourceSpeed, sourceBpm, heldOut }): BankState => ({ markers, labels, sourceSpeed, sourceBpm, heldOut })),
       padSlices: this.padSlices,
       padSpans: this.padSpans,
       pads: this.pads,
@@ -369,7 +371,6 @@ export class Session {
       song: this.song,
       muted: this.muted,
       soloed: this.soloed,
-      labels: this.bank.labels,
       bpm: this.bpm,
       bars: this.bars,
       metronome: this.metronome,
@@ -379,9 +380,6 @@ export class Session {
       style: this.style,
       density: this.density,
       looseness: this.looseness,
-      sourceSpeed: this.bank.sourceSpeed,
-      sourceBpm: this.bank.sourceBpm,
-      heldOut: this.bank.heldOut,
       masterFx: this.masterFx,
       key: this.key,
       keyAuto: this.keyAuto,
@@ -391,7 +389,7 @@ export class Session {
 
   private scheduleSave(json: string) {
     if (!this.projectId || json === this.lastSaved) return
-    if (!this.bank.sample && !this.pads.some((p) => p.sample)) return
+    if (!this.banks.some((b) => b.sample) && !this.pads.some((p) => p.sample)) return
     this.pendingSave = json
     clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => this.flushSave(), SAVE_DELAY_MS)
@@ -404,17 +402,17 @@ export class Session {
     this.pendingSave = null
     if (!json || !id) return
     try {
-      if (this.bank.sample && !this.bank.sourceId) {
+      for (const bank of this.banks) {
+        if (!bank.sample || bank.sourceId) continue
         await navigator.storage?.persist?.()
-        this.bank.sourceId = await saveSource(this.bank.sample.left, this.bank.sample.right, this.sampleRate)
+        bank.sourceId = await saveSource(bank.sample.left, bank.sample.right, this.sampleRate)
       }
       await saveProject({
         id,
         name: this.projectName,
         version: 1,
         updatedAt: 0,
-        sourceId: this.bank.sourceId,
-        sourceName: this.bank.sample?.name ?? null,
+        sources: this.banks.map((b) => (b.sample && b.sourceId ? { id: b.sourceId, name: b.sample.name } : null)),
         state: JSON.parse(json),
       })
       this.lastSaved = json
@@ -455,11 +453,11 @@ export class Session {
     await this.flushSave()
     const loaded = await loadProject(id)
     if (!loaded) return
-    const { doc, source } = loaded
+    const { doc, sources } = loaded
     this.leaveShared()
     this.projectId = id
     writeLastProject(id)
-    this.applyProject(doc.name, doc.state, source, doc.sourceName, doc.sourceId)
+    this.applyProject(doc.name, doc.state, sources)
   }
 
   async openShared(id: string, bytes: Uint8Array) {
@@ -476,7 +474,7 @@ export class Session {
     this.sharedBundle = bundle
     this.shared = { id, name: bundle.project.name }
     this.sharedSamples = new Map(bundle.samples.map((s) => [s.meta.id, s]))
-    this.applyProject(bundle.project.name, bundle.project.state, bundle.source, bundle.source?.name ?? null, null)
+    this.applyProject(bundle.project.name, bundle.project.state, bundle.sources)
     if (this.events.length > 0 || this.song.length > 0) this.togglePlaying()
   }
 
@@ -495,20 +493,22 @@ export class Session {
     history.replaceState(null, '', '/')
   }
 
-  private applyProject(name: string, state: Record<string, unknown>, source: SourceAudio | null, sourceName: string | null, sourceId: string | null) {
+  private applyProject(name: string, state: Record<string, unknown>, sources: (BundleSource | SourceAudio | null)[]) {
     if (!this.sily) return
     const st = state as ReturnType<Session['projectState']>
+    const [saved] = readBanks(st)
+    const [source] = sources
     this.projectName = name
     if (source) {
       const left = resample(source.left, source.sampleRate, this.sampleRate)
       const right = resample(source.right, source.sampleRate, this.sampleRate)
-      this.setSample(sourceName ?? 'source', left, right)
-      this.bank.sourceId = source.sampleRate === this.sampleRate ? sourceId : null
+      this.setSample(source.name, left, right)
+      this.bank.sourceId = 'id' in source && source.sampleRate === this.sampleRate ? source.id : null
     } else {
       this.clearSource()
     }
-    this.bank.markers = st.markers ?? []
-    this.bank.labels = st.labels ?? {}
+    this.bank.markers = saved.markers
+    this.bank.labels = saved.labels
     this.padSlices = st.padSlices ?? identity()
     this.padSpans = st.padSpans ?? noSpans()
     this.pads = (st.pads ?? []).map((p: Partial<PadSettings>) => ({
@@ -534,9 +534,9 @@ export class Session {
     this.style = st.style ?? this.style
     this.density = st.density ?? this.density
     this.looseness = st.looseness ?? this.looseness
-    this.bank.sourceSpeed = st.sourceSpeed ?? { mode: 'tape', rate: 1 }
-    this.bank.sourceBpm = st.sourceBpm ?? null
-    this.bank.heldOut = st.heldOut ?? false
+    this.bank.sourceSpeed = saved.sourceSpeed
+    this.bank.sourceBpm = saved.sourceBpm
+    this.bank.heldOut = saved.heldOut
     this.masterFx = { ...DEFAULT_FX, ...st.masterFx }
     this.key = st.key ?? this.key
     this.keyAuto = st.keyAuto ?? true
@@ -560,12 +560,7 @@ export class Session {
     const samples = (await Promise.all(ids.map((id) => this.sharedSamples.get(id) ?? loadSample(id)))).flatMap((s) => (s ? [s] : []))
     return {
       project: { name: this.projectName, state: JSON.parse(JSON.stringify(this.projectState())) },
-      source: this.bank.sample && {
-        name: this.bank.sample.name,
-        sampleRate: this.sampleRate,
-        left: this.bank.sample.left,
-        right: this.bank.sample.right,
-      },
+      sources: this.banks.map(({ sample }) => sample && { name: sample.name, sampleRate: this.sampleRate, left: sample.left, right: sample.right }),
       samples,
     }
   }
@@ -577,50 +572,57 @@ export class Session {
 
   private async shareBundle(): Promise<Bundle> {
     const bundle = await this.bundle()
-    const source = bundle.source
-    if (!source) return bundle
     const st = bundle.project.state as ReturnType<Session['projectState']>
-    const trim = trimSource({
-      frames: source.left.length,
-      maxFrames: Math.floor(MAX_SOURCE_SECONDS * source.sampleRate),
-      markers: st.markers,
-      padSlices: st.padSlices,
-      padSpans: st.padSpans,
-      labels: st.labels,
-      ownPads: st.pads.map((p) => !!p.sample),
-    })
-    const detached = trim.detached.map(({ pad, range }) => {
-      const audio = this.detachedAudio(range)
-      const category = this.labelOf(pad)?.category ?? 'perc'
-      const meta: SampleMeta = {
-        id: newId(),
-        name: `${source.name} ${pad + 1}`,
-        category,
-        sampleRate: this.sampleRate,
-        frames: audio.left.length,
-        createdAt: Date.now(),
-        settings: {},
+    const padSlices = [...st.padSlices]
+    const padSpans = [...st.padSpans]
+    const pads = [...st.pads]
+    const detached: Bundle['samples'] = []
+    const banks = st.banks.map((saved, b) => {
+      const source = bundle.sources[b] ?? null
+      if (!source) return { saved, source }
+      const base = b * BANK_PADS
+      const inBank = <T,>(xs: T[]) => xs.slice(base, base + BANK_PADS)
+      const trim = trimSource({
+        frames: source.left.length,
+        maxFrames: Math.floor(MAX_SOURCE_SECONDS * source.sampleRate),
+        markers: saved.markers,
+        padSlices: inBank(padSlices),
+        padSpans: inBank(padSpans),
+        labels: saved.labels,
+        ownPads: inBank(pads).map((p) => !!p.sample),
+      })
+      padSlices.splice(base, trim.padSlices.length, ...trim.padSlices)
+      padSpans.splice(base, trim.padSpans.length, ...trim.padSpans)
+      for (const { pad, range } of trim.detached) {
+        const audio = this.detachedAudio(this.banks[b], range)
+        const meta: SampleMeta = {
+          id: newId(),
+          name: `${source.name} ${pad + 1}`,
+          category: this.labelOf(base + pad)?.category ?? 'perc',
+          sampleRate: this.sampleRate,
+          frames: audio.left.length,
+          createdAt: Date.now(),
+          settings: {},
+        }
+        pads[base + pad] = { ...pads[base + pad], sample: { id: meta.id, name: meta.name, category: meta.category as Category } }
+        detached.push({ meta, ...audio })
       }
-      return { pad, sample: { meta, ...audio } }
-    })
-    const pads = st.pads.map((p, pad) => {
-      const d = detached.find((x) => x.pad === pad)
-      return d ? { ...p, sample: { id: d.sample.meta.id, name: d.sample.meta.name, category: d.sample.meta.category as Category } } : p
+      return {
+        saved: { ...saved, markers: trim.markers, labels: trim.labels },
+        source: { ...source, left: source.left.slice(trim.start, trim.end), right: source.right.slice(trim.start, trim.end) },
+      }
     })
     return {
-      project: {
-        name: bundle.project.name,
-        state: { ...st, markers: trim.markers, padSlices: trim.padSlices, padSpans: trim.padSpans, labels: trim.labels, pads },
-      },
-      source: { ...source, left: source.left.slice(trim.start, trim.end), right: source.right.slice(trim.start, trim.end) },
-      samples: [...bundle.samples, ...detached.map((d) => d.sample)],
+      project: { name: bundle.project.name, state: { ...st, banks: banks.map((b) => b.saved), padSlices, padSpans, pads } },
+      sources: banks.map((b) => b.source),
+      samples: [...bundle.samples, ...detached],
     }
   }
 
-  private detachedAudio([start, end]: [number, number]): { left: Float32Array; right: Float32Array } {
-    const engine = this.bank.engineSample ?? this.bank.sample!
-    const [a, b] = [this.bank.map.toEngine(start), this.bank.map.toEngine(end)]
-    const rate = this.bank.sourceSpeed.mode === 'tape' ? this.bank.sourceSpeed.rate : 1
+  private detachedAudio(bank: Bank, [start, end]: [number, number]): { left: Float32Array; right: Float32Array } {
+    const engine = bank.engineSample ?? bank.sample!
+    const [a, b] = [bank.map.toEngine(start), bank.map.toEngine(end)]
+    const rate = bank.sourceSpeed.mode === 'tape' ? bank.sourceSpeed.rate : 1
     return {
       left: resample(engine.left.subarray(a, b), this.sampleRate * rate, this.sampleRate),
       right: resample(engine.right.subarray(a, b), this.sampleRate * rate, this.sampleRate),
@@ -670,18 +672,12 @@ export class Session {
   private async importBundle(bundle: Bundle) {
     try {
       for (const sample of bundle.samples) await importSample(sample)
-      const source = bundle.source
-      const sourceId = source ? await saveSource(source.left, source.right, source.sampleRate) : null
+      const sources = []
+      for (const source of bundle.sources) {
+        sources.push(source && { id: await saveSource(source.left, source.right, source.sampleRate), name: source.name })
+      }
       const id = newId()
-      await saveProject({
-        id,
-        name: bundle.project.name,
-        version: 1,
-        updatedAt: 0,
-        sourceId,
-        sourceName: source?.name ?? null,
-        state: bundle.project.state,
-      })
+      await saveProject({ id, name: bundle.project.name, version: 1, updatedAt: 0, sources, state: bundle.project.state })
       await this.refreshProjects()
       await this.refreshLibrary()
       await this.openProject(id)
