@@ -7,6 +7,10 @@ use crate::slicing::slices;
 pub const BANK_PADS: usize = 16;
 pub const SOURCES: usize = 4;
 pub const PADS: usize = BANK_PADS * SOURCES;
+pub const METER_REVERB: usize = PADS;
+pub const METER_DELAY: usize = PADS + 1;
+pub const METER_MASTER: usize = PADS + 2;
+pub const METERS: usize = PADS + 3;
 const VOICES: usize = 64;
 const MAX_EVENTS: usize = 16384;
 const MAX_REPEATS: usize = 256;
@@ -117,6 +121,7 @@ pub struct Engine {
     delay: Delay,
     delay_level: f32,
     delay_beats: f64,
+    meters: [f32; METERS],
     pending: Vec<(usize, Event)>,
     held: [Option<Held>; PADS],
     repeats: Vec<Repeat>,
@@ -161,6 +166,7 @@ impl Engine {
             delay: Delay::new(sample_rate as f32, MAX_DELAY_SECONDS),
             delay_level: 0.0,
             delay_beats: 0.75,
+            meters: [0.0; METERS],
             pending: Vec::with_capacity(MAX_EVENTS),
             held: [None; PADS],
             repeats: Vec::with_capacity(MAX_REPEATS),
@@ -497,6 +503,15 @@ impl Engine {
         }
         self.mix_buses(frames);
         self.limit(frames);
+        self.meters[METER_MASTER] = self.meters[METER_MASTER].max(peak(&self.out[0][..frames]).max(peak(&self.out[1][..frames])));
+    }
+
+    pub fn meters(&self) -> &[f32; METERS] {
+        &self.meters
+    }
+
+    pub fn reset_meters(&mut self) {
+        self.meters = [0.0; METERS];
     }
 
     pub fn set_pad_fx(&mut self, pad: usize, settings: FxSettings) {
@@ -543,7 +558,7 @@ impl Engine {
             send[0][..frames].fill(0.0);
             send[1][..frames].fill(0.0);
         }
-        for (((bus, fx), comp), pad) in self.buses.iter_mut().zip(&mut self.pad_fx).zip(&mut self.pad_comp).zip(&self.pads) {
+        for ((((bus, fx), comp), pad), meter) in self.buses.iter_mut().zip(&mut self.pad_fx).zip(&mut self.pad_comp).zip(&self.pads).zip(&mut self.meters) {
             let [l, r] = bus;
             fx.process(&mut l[..frames], &mut r[..frames]);
             comp.process(&mut l[..frames], &mut r[..frames]);
@@ -551,6 +566,7 @@ impl Engine {
             let amounts = [pad.reverb_send, pad.delay_send];
             for i in 0..frames {
                 let x = [l[i] * gains[0], r[i] * gains[1]];
+                *meter = meter.max(x[0].abs()).max(x[1].abs());
                 for ch in 0..2 {
                     self.out[ch][i] += x[ch];
                     for (send, amount) in self.sends.iter_mut().zip(amounts) {
@@ -565,11 +581,13 @@ impl Engine {
         if self.reverb_level > 0.0 {
             self.reverb.process(&mut reverb_l[..frames], &mut reverb_r[..frames]);
             add_return(&mut self.out, [&reverb_l[..frames], &reverb_r[..frames]], self.reverb_level);
+            self.meters[METER_REVERB] = self.meters[METER_REVERB].max(peak(&reverb_l[..frames]).max(peak(&reverb_r[..frames])) * self.reverb_level);
         }
         if self.delay_level > 0.0 {
             let seconds = (self.delay_beats * 60.0 / self.bpm) as f32;
             self.delay.process(&mut delay_l[..frames], &mut delay_r[..frames], seconds);
             add_return(&mut self.out, [&delay_l[..frames], &delay_r[..frames]], self.delay_level);
+            self.meters[METER_DELAY] = self.meters[METER_DELAY].max(peak(&delay_l[..frames]).max(peak(&delay_r[..frames])) * self.delay_level);
         }
         let [l, r] = &mut self.out;
         self.glue.process(&mut l[..frames], &mut r[..frames]);
@@ -724,6 +742,10 @@ impl Engine {
     pub fn output(&self, channel: usize) -> &[f32] {
         &self.out[channel]
     }
+}
+
+fn peak(x: &[f32]) -> f32 {
+    x.iter().fold(0.0, |m, v| m.max(v.abs()))
 }
 
 fn add_return(out: &mut [Vec<f32>; 2], wet: [&[f32]; 2], level: f32) {
@@ -1298,6 +1320,41 @@ mod tests {
             e.process(128, i as f64 * 128.0 / 44_100.0);
         }
         assert!(e.output(0)[64] < 0.8, "{}", e.output(0)[64]);
+    }
+
+    #[test]
+    fn the_meter_of_a_playing_pad_shows_its_peak() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_markers(0, vec![0, 200, 400, 600, 800]);
+        e.trigger(3, 1.0, 0.0);
+        render(&mut e, 50);
+        assert!((e.meters()[3] - 0.5).abs() < 1e-3, "{}", e.meters()[3]);
+    }
+
+    #[test]
+    fn a_silent_pad_shows_no_level() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_markers(0, vec![0, 200, 400, 600, 800]);
+        e.trigger(3, 1.0, 0.0);
+        render(&mut e, 50);
+        assert_eq!(e.meters()[4], 0.0);
+    }
+
+    #[test]
+    fn the_master_meter_shows_the_output() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.trigger(0, 1.0, 0.0);
+        render(&mut e, 50);
+        assert!((e.meters()[METER_MASTER] - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn resetting_the_meters_clears_them() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.trigger(0, 1.0, 0.0);
+        render(&mut e, 50);
+        e.reset_meters();
+        assert!(e.meters().iter().all(|m| *m == 0.0));
     }
 
     fn constant(value: f32, frames: usize) -> Vec<f32> {
