@@ -42,6 +42,20 @@
       ? true
       : target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement
 
+  const heldKeys = new Map<string, number>()
+
+  const releaseKeys = () => {
+    heldKeys.clear()
+    session.releasePads()
+  }
+
+  const onkeyup = (e: KeyboardEvent) => {
+    const pad = heldKeys.get(e.code)
+    if (pad === undefined) return
+    heldKeys.delete(e.code)
+    session.padUp(pad)
+  }
+
   const onkeydown = (e: KeyboardEvent) => {
     if (!session.sily || e.repeat || typing(e.target)) return
     if ((e.metaKey || e.ctrlKey) && e.code === 'KeyZ') {
@@ -66,7 +80,11 @@
         return
       case 'Tab':
         e.preventDefault()
-        session.keyboardMode = !session.keyboardMode
+        heldKeys.clear()
+        session.toggleKeyboardMode()
+        return
+      case 'KeyN':
+        session.toggleNoteRepeat()
         return
       case 'KeyP':
         session.toggleAudition()
@@ -91,6 +109,7 @@
     const pad = padForCode(e.code)
     if (pad !== undefined) {
       e.preventDefault()
+      heldKeys.set(e.code, pad)
       session.padDown(pad, e.timeStamp)
     }
   }
@@ -131,7 +150,8 @@
   }
 </script>
 
-<svelte:window {onkeydown} ondragover={(e) => e.preventDefault()} {ondrop} onfocus={() => session.correctionLogin && session.flushCorrections()} />
+<svelte:document onvisibilitychange={() => document.hidden && releaseKeys()} />
+<svelte:window {onkeydown} {onkeyup} onblur={releaseKeys} ondragover={(e) => e.preventDefault()} {ondrop} onfocus={() => session.correctionLogin && session.flushCorrections()} />
 
 {#if !session.sily}
   <main class="start">

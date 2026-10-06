@@ -26,6 +26,18 @@ export const recordHit = (events: PadEvent[], pad: number, beat: number, velocit
   { id: nextId(), beat, pad, velocity, nudge: 0, pitch },
 ]
 
+export const recordRepeat = (
+  events: PadEvent[],
+  pad: number,
+  beat: number,
+  velocity: number,
+  pitch: number,
+  tolerance: number,
+): PadEvent[] =>
+  events.some((e) => e.pad === pad && Math.abs(e.beat - beat) < tolerance)
+    ? events
+    : recordHit(events, pad, beat, velocity, pitch)
+
 export const nudgeEvent = (events: PadEvent[], id: string, delta: number): PadEvent[] =>
   events.map((e) => (e.id === id ? { ...e, nudge: e.nudge + delta, auto: false } : e))
 

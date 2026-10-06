@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, recordRepeat, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 
 const at = (beat: number, pad = 0, id = `${pad}@${beat}`): PadEvent => ({ id, beat, pad, velocity: 1, nudge: 0, pitch: 0 })
 
@@ -15,6 +15,21 @@ describe('toggleStep', () => {
 
   it('keeps events of other pads on the same step', () => {
     expect(toggleStep([at(1.25, 3)], 2, 1.25, 0.125)).toHaveLength(2)
+  })
+})
+
+describe('recordRepeat', () => {
+  it('adds a repeat on an empty step', () => {
+    expect(recordRepeat([], 2, 0.5, 0.7, 0, 0.125)[0]).toMatchObject({ pad: 2, beat: 0.5, velocity: 0.7 })
+  })
+
+  it('leaves a step the pad already plays', () => {
+    const events = [at(0.52, 2)]
+    expect(recordRepeat(events, 2, 0.5, 1, 0, 0.125)).toBe(events)
+  })
+
+  it('adds a repeat beside another pad on the same step', () => {
+    expect(recordRepeat([at(0.5, 3)], 2, 0.5, 1, 0, 0.125)).toHaveLength(2)
   })
 })
 
