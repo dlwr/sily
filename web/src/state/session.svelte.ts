@@ -35,6 +35,7 @@ import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './sour
 import { History } from './history'
 import { Bank, type Label, type Sample } from './bank.svelte'
 import { isSlice, sampleKey, slicesOf, type PadSample } from './padSample'
+import { fallMeters } from './meters'
 import { BANK_PADS, BANKS, bankForSource, bankOf, extendToBanks, inBank, mapBankEvents, PADS, padName, readBanks, withBank, type BankState } from './banks'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers, minSliceSeconds } from './markers'
@@ -158,6 +159,7 @@ export class Session {
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
   glue = $state(0)
+  meters = $state.raw<number[]>([])
   returns = $state<Returns>(structuredClone(DEFAULT_RETURNS))
   library = $state<SampleMeta[]>([])
   key = $state<Key>({ root: 0, minor: true })
@@ -373,6 +375,7 @@ export class Session {
       if (this.playing) this.flashPlayed(this.tickBeat ?? -1e-9, t.beat)
       this.tickBeat = this.playing ? t.beat : null
       this.beat = t.beat
+      this.meters = fallMeters(this.meters, t.meters)
       this.auditionFrame = t.auditionFrame === null ? null : this.bank.map.fromEngine(t.auditionFrame)
       if (t.auditionFrame !== null) this.lastTick = { frame: t.auditionFrame, time: t.time }
     }
