@@ -41,14 +41,14 @@ pub extern "C" fn engine_init(sample_rate: f64, max_block: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn engine_load(left: *const f32, right: *const f32, frames: u32) {
-    engine().load_sample(floats(left, frames).to_vec(), floats(right, frames).to_vec());
+pub unsafe extern "C" fn engine_load(source: u32, left: *const f32, right: *const f32, frames: u32) {
+    engine().load_source(source as usize, floats(left, frames).to_vec(), floats(right, frames).to_vec());
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn engine_set_markers(ptr: *const u32, len: u32) {
+pub unsafe extern "C" fn engine_set_markers(source: u32, ptr: *const u32, len: u32) {
     let markers = slice::from_raw_parts(ptr, len as usize).iter().map(|&m| m as usize).collect();
-    engine().set_markers(markers);
+    engine().set_markers(source as usize, markers);
 }
 
 #[no_mangle]
@@ -68,8 +68,8 @@ pub extern "C" fn engine_clear_pad_stretched(pad: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn engine_set_source_rate(rate: f64) {
-    engine().set_source_rate(rate);
+pub extern "C" fn engine_set_source_rate(source: u32, rate: f64) {
+    engine().set_source_rate(source as usize, rate);
 }
 
 #[no_mangle]
@@ -123,8 +123,8 @@ pub extern "C" fn engine_repeat_beat(i: u32) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn engine_audition(from_frame: i32) {
-    engine().audition((from_frame >= 0).then_some(from_frame as usize));
+pub extern "C" fn engine_audition(source: u32, from_frame: i32) {
+    engine().audition(source as usize, (from_frame >= 0).then_some(from_frame as usize));
 }
 
 #[no_mangle]
