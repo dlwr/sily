@@ -69,6 +69,15 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'sourceRate':
         w.engine_set_source_rate(msg.source, msg.rate)
         break
+      case 'padMix':
+        w.engine_set_pad_mix(msg.pad, msg.pan, msg.reverb, msg.delay)
+        break
+      case 'reverb':
+        w.engine_set_reverb(msg.size, msg.damping, msg.level)
+        break
+      case 'delay':
+        w.engine_set_delay(msg.feedback, msg.toneHz, msg.pingPong ? 1 : 0, msg.beats, msg.level)
+        break
       case 'trigger':
         w.engine_trigger(msg.pad, msg.velocity, msg.pitch)
         break

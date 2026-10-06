@@ -2,6 +2,7 @@ use sily_core::classify::{classify, Category, Model};
 use sily_core::engine::Engine;
 use sily_core::features::extract;
 use sily_core::fx::FxSettings;
+use sily_core::sends::{DelaySettings, ReverbSettings};
 use sily_core::sequencer::{Event, Groove};
 use sily_core::slicing::onset_markers;
 use std::alloc::{alloc as raw_alloc, dealloc as raw_dealloc, Layout};
@@ -391,4 +392,19 @@ static mut RESULT_CHROMA: [f32; 12] = [0.0; 12];
 pub unsafe extern "C" fn analyze_chroma(mono: *const f32, frames: u32, sample_rate: u32) -> *const f32 {
     RESULT_CHROMA = sily_core::tonal::chroma(floats(mono, frames), sample_rate);
     RESULT_CHROMA.as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn engine_set_pad_mix(pad: u32, pan: f32, reverb_send: f32, delay_send: f32) {
+    engine().set_pad_mix(pad as usize, pan, reverb_send, delay_send);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_set_reverb(size: f32, damping: f32, level: f32) {
+    engine().set_reverb(ReverbSettings { size, damping }, level);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_set_delay(feedback: f32, tone_hz: f32, ping_pong: u32, beats: f64, level: f32) {
+    engine().set_delay(DelaySettings { feedback, tone_hz, ping_pong: ping_pong != 0 }, beats, level);
 }
