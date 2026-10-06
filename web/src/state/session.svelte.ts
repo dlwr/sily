@@ -33,7 +33,7 @@ import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, recordRepeat,
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { Bank, type Label, type Sample } from './bank.svelte'
-import { readBanks, type BankState } from './banks'
+import { BANK_PADS, BANKS, bankOf, extendToBanks, inBank, mapBankEvents, PADS, readBanks, withBank, type BankState } from './banks'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
@@ -64,16 +64,13 @@ type Doc = {
   patterns: Pattern[]
   currentPattern: string
   song: string[]
-  markers: number[]
+  banks: { markers: number[]; labels: Record<number, Label> }[]
   padSlices: number[]
   padSpans: Span[]
   pads: PadSettings[]
-  labels: Record<number, Label>
 }
 
 
-const PADS = 16
-const BANK_PADS = 16
 const LAST_PROJECT_KEY = 'sily.project'
 const SAVE_DELAY_MS = 800
 const freshPad = (): PadSettings => ({
@@ -97,14 +94,14 @@ const PITCH_HZ = 108
 const HAT_CHOKE = 1
 const CANDIDATES = 4
 const MAX_PHRASE_CANDIDATES = 32
-const identity = () => Array.from({ length: PADS }, (_, i) => i)
+const identity = () => Array.from({ length: PADS }, (_, i) => i % BANK_PADS)
 const noSpans = (): Span[] => Array(PADS).fill(null)
 const EXPORT_TAIL_SECONDS = 2
 const SILENCE = 1e-4
 
 export class Session {
   sily = $state<Sily | null>(null)
-  banks = $state.raw<Bank[]>([new Bank()])
+  banks = $state.raw<Bank[]>(Array.from({ length: BANKS }, (_, i) => new Bank(i)))
   focusedBank = $state(0)
   pads = $state<PadSettings[]>(
     Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null, pitchAuto: true, fxAuto: true })),
@@ -147,9 +144,6 @@ export class Session {
   looseness = $state(0.5)
   candidates = $state<{ style: Style; events: PadEvent[] }[]>([])
   previewing = $state<number | null>(null)
-  refining = $state(false)
-  refined = $state(0)
-  refineTotal = $state(0)
   modelDownload = $state<ModelDownload | null>(null)
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
@@ -171,8 +165,6 @@ export class Session {
   private pendingSave: string | null = null
   private beforeGenerate: PadEvent[] | null = null
   private clap = new ClapClient((download) => (this.modelDownload = download))
-  private refineGeneration = 0
-  private phraseToken = 0
 
   private lastTick = { frame: 0, time: 0 }
   private capture: Capture | null = null
@@ -184,11 +176,8 @@ export class Session {
   private heard: Heard | null = null
   private switchPending = false
   private labelingTimer: ReturnType<typeof setTimeout> | undefined
-  private classifyTimer: ReturnType<typeof setTimeout> | undefined
-  private sourceToken = 0
   private loadToken = 0
   private history = new History<Doc>()
-  private kitPending = false
   private playWhenBuilt = false
   private stretchVersion = 0
   private requested = new Set<string>()
@@ -198,6 +187,10 @@ export class Session {
 
   get bank(): Bank {
     return this.banks[this.focusedBank]
+  }
+
+  get bankBase() {
+    return this.focusedBank * BANK_PADS
   }
 
   get patternBeats() {
@@ -436,7 +429,8 @@ export class Session {
     this.projectId = newId()
     this.projectName = `無題 ${new Date().toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
     writeLastProject(this.projectId)
-    this.clearSource()
+    this.banks.forEach((bank) => this.clearBank(bank))
+    this.history = new History<Doc>()
     this.pads = Array.from({ length: PADS }, freshPad)
     this.events = []
     this.resetSong()
@@ -496,28 +490,32 @@ export class Session {
   private applyProject(name: string, state: Record<string, unknown>, sources: (BundleSource | SourceAudio | null)[]) {
     if (!this.sily) return
     const st = state as ReturnType<Session['projectState']>
-    const [saved] = readBanks(st)
-    const [source] = sources
+    const saved = readBanks(st)
     this.projectName = name
-    if (source) {
-      const left = resample(source.left, source.sampleRate, this.sampleRate)
-      const right = resample(source.right, source.sampleRate, this.sampleRate)
-      this.setSample(source.name, left, right)
-      this.bank.sourceId = 'id' in source && source.sampleRate === this.sampleRate ? source.id : null
-    } else {
-      this.clearSource()
-    }
-    this.bank.markers = saved.markers
-    this.bank.labels = saved.labels
-    this.padSlices = st.padSlices ?? identity()
-    this.padSpans = st.padSpans ?? noSpans()
-    this.pads = (st.pads ?? []).map((p: Partial<PadSettings>) => ({
+    this.banks.forEach((bank, b) => {
+      const source = sources[b]
+      if (source) {
+        const left = resample(source.left, source.sampleRate, this.sampleRate)
+        const right = resample(source.right, source.sampleRate, this.sampleRate)
+        this.setSample(bank, source.name, left, right)
+        bank.sourceId = 'id' in source && source.sampleRate === this.sampleRate ? source.id : null
+      } else {
+        this.clearBank(bank)
+      }
+      bank.markers = saved[b].markers
+      bank.labels = saved[b].labels
+      bank.sourceSpeed = saved[b].sourceSpeed
+      bank.sourceBpm = saved[b].sourceBpm
+      bank.heldOut = saved[b].heldOut
+    })
+    this.padSlices = extendToBanks(st.padSlices, (pad) => pad % BANK_PADS)
+    this.padSpans = extendToBanks<Span>(st.padSpans, () => null)
+    this.pads = extendToBanks<Partial<PadSettings>>(st.pads, freshPad).map((p) => ({
       ...freshPad(),
       ...p,
       pitchAuto: p.pitchAuto ?? p.pitch === 0,
       fxAuto: p.fxAuto ?? isFlat({ ...DEFAULT_FX, ...p.fx }),
     }))
-    while (this.pads.length < PADS) this.pads.push(freshPad())
     this.events = st.events ?? []
     this.bpm = st.bpm ?? this.bpm
     this.bars = st.bars ?? this.bars
@@ -525,8 +523,8 @@ export class Session {
     this.patterns = st.patterns ?? []
     this.currentPattern = st.currentPattern ?? 'A'
     this.song = st.song ?? []
-    this.muted = st.muted ?? Array(PADS).fill(false)
-    this.soloed = st.soloed ?? Array(PADS).fill(false)
+    this.muted = extendToBanks(st.muted, () => false)
+    this.soloed = extendToBanks(st.soloed, () => false)
     this.metronome = st.metronome ?? this.metronome
     this.grid = st.grid ?? this.grid
     this.strength = st.strength ?? this.strength
@@ -534,23 +532,22 @@ export class Session {
     this.style = st.style ?? this.style
     this.density = st.density ?? this.density
     this.looseness = st.looseness ?? this.looseness
-    this.bank.sourceSpeed = saved.sourceSpeed
-    this.bank.sourceBpm = saved.sourceBpm
-    this.bank.heldOut = saved.heldOut
     this.masterFx = { ...DEFAULT_FX, ...st.masterFx }
     this.key = st.key ?? this.key
     this.keyAuto = st.keyAuto ?? true
     this.autoShape = st.autoShape ?? true
     this.history = new History<Doc>()
     this.syncOwn()
-    this.sendMarkers()
+    this.banks.forEach((bank) => this.sendMarkers(bank))
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.sily.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
     this.syncEvents()
     this.syncTransport()
     this.syncGroove()
-    this.applySource()
-    this.classifySlices()
+    this.banks.forEach((bank) => {
+      this.applySource(bank)
+      this.classifySlices(bank)
+    })
     this.lastSaved = JSON.stringify(this.projectState())
   }
 
@@ -581,15 +578,14 @@ export class Session {
       const source = bundle.sources[b] ?? null
       if (!source) return { saved, source }
       const base = b * BANK_PADS
-      const inBank = <T,>(xs: T[]) => xs.slice(base, base + BANK_PADS)
       const trim = trimSource({
         frames: source.left.length,
         maxFrames: Math.floor(MAX_SOURCE_SECONDS * source.sampleRate),
         markers: saved.markers,
-        padSlices: inBank(padSlices),
-        padSpans: inBank(padSpans),
+        padSlices: inBank(padSlices, b),
+        padSpans: inBank(padSpans, b),
         labels: saved.labels,
-        ownPads: inBank(pads).map((p) => !!p.sample),
+        ownPads: inBank(pads, b).map((p) => !!p.sample),
       })
       padSlices.splice(base, trim.padSlices.length, ...trim.padSlices)
       padSpans.splice(base, trim.padSpans.length, ...trim.padSpans)
@@ -695,18 +691,25 @@ export class Session {
     await this.refreshProjects()
   }
 
-  private clearSource() {
-    this.bank.sample = null
-    this.bank.sourceId = null
-    this.bank.engineSample = null
-    this.bank.loadedStretch = null
-    this.bank.markers = []
-    this.bank.labels = {}
-    this.padSlices = identity()
-    this.padSpans = noSpans()
-    this.stopAudition()
-    this.sily?.send({ type: 'load', source: 0, left: new Float32Array(0), right: new Float32Array(0) })
-    this.history = new History<Doc>()
+  private clearBank(bank: Bank) {
+    bank.sample = null
+    bank.sourceId = null
+    bank.engineSample = null
+    bank.loadedStretch = null
+    bank.markers = []
+    bank.labels = {}
+    bank.sourceSpeed = { mode: 'tape', rate: 1 }
+    bank.sourceBpm = null
+    bank.heldOut = false
+    bank.sourceToken++
+    this.padSlices = withBank(this.padSlices, bank.index, inBank(identity(), bank.index))
+    this.padSpans = withBank(this.padSpans, bank.index, inBank(noSpans(), bank.index))
+    if (bank === this.bank) this.stopAudition()
+    this.sily?.send({ type: 'load', source: bank.index, left: new Float32Array(0), right: new Float32Array(0) })
+  }
+
+  private leads(bank: Bank) {
+    return this.banks.find((b) => b.sample) === bank
   }
 
   async loadFile(file: File) {
@@ -716,46 +719,50 @@ export class Session {
     try {
       const { left, right } = await this.sily.decode(file)
       if (token !== this.loadToken) return
-      this.setSample(file.name, left, right)
-      this.buildFromSource()
+      this.setSample(this.bank, file.name, left, right)
+      this.buildFromSource(this.bank)
     } catch {
       this.message = `${file.name} を読み込めなかった`
     }
   }
 
-  setSample(name: string, left: Float32Array, right: Float32Array) {
+  private setSample(bank: Bank, name: string, left: Float32Array, right: Float32Array) {
     if (!this.sily) return
-    this.bank.sample = { name, left, right, mono: mixdown(left, right) }
-    this.bank.sourceId = null
-    if (this.keyAuto) this.key = estimateKey(this.sily.chroma(this.bank.sample.mono))
-    this.bank.sourceSpeed = { mode: 'tape', rate: 1 }
-    this.bank.sourceBpm = null
-    this.bank.heldOut = false
-    this.bank.splitByHash = null
-    this.kitPending = false
-    this.playWhenBuilt = false
-    this.loadEngineSample(left, right, null)
-    this.sily.send({ type: 'sourceRate', source: 0, rate: 1 })
+    const b = bank.index
+    bank.sample = { name, left, right, mono: mixdown(left, right) }
+    bank.sourceId = null
+    if (this.keyAuto && this.leads(bank)) this.key = estimateKey(this.sily.chroma(bank.sample.mono))
+    bank.sourceSpeed = { mode: 'tape', rate: 1 }
+    bank.sourceBpm = null
+    bank.heldOut = false
+    bank.splitByHash = null
+    bank.kitPending = false
+    if (this.leads(bank)) this.playWhenBuilt = false
+    this.loadEngineSample(bank, left, right, null)
+    this.sily.send({ type: 'sourceRate', source: b, rate: 1 })
     this.adopt()
     this.history = new History<Doc>()
-    this.bank.markers = []
-    this.bank.labels = {}
-    this.bank.features.clear()
-    this.bank.embeddings.clear()
-    this.padSlices = identity()
-    this.padSpans = noSpans()
-    this.pads.forEach((p) => {
-      if (!p.sample) p.stretch = false
+    bank.markers = []
+    bank.labels = {}
+    bank.features.clear()
+    bank.embeddings.clear()
+    this.padSlices = withBank(this.padSlices, b, inBank(identity(), b))
+    this.padSpans = withBank(this.padSpans, b, inBank(noSpans(), b))
+    this.pads.forEach((p, pad) => {
+      if (bankOf(pad) === b && !p.sample) p.stretch = false
     })
-    this.stretched.clear()
-    this.requested.clear()
-    this.stretchVersion++
-    this.sourceToken++
-    this.events = this.events.filter((e) => this.pads[e.pad]?.sample)
-    this.fillStretched()
+    bank.sourceToken++
+    const kept = (e: PadEvent) => bankOf(e.pad) !== b || !!this.pads[e.pad]?.sample
+    this.events = this.events.filter(kept)
+    this.patterns = this.patterns.map((p) => ({ ...p, events: p.events.filter(kept) }))
+    this.invalidateStretched(this.padsOf(bank))
     this.syncEvents()
     this.message = ''
-    this.classifySlices()
+    this.classifySlices(bank)
+  }
+
+  private padsOf(bank: Bank): number[] {
+    return Array.from({ length: BANK_PADS }, (_, i) => bank.index * BANK_PADS + i)
   }
 
   async toggleCapture(source: { device: string | undefined } | 'display') {
@@ -792,8 +799,8 @@ export class Session {
       return
     }
     if (left.length > 0) {
-      this.setSample(`capture-${new Date().toLocaleTimeString()}`, left, right)
-      this.buildFromSource()
+      this.setSample(this.bank, `capture-${new Date().toLocaleTimeString()}`, left, right)
+      this.buildFromSource(this.bank)
     }
   }
 
@@ -807,12 +814,12 @@ export class Session {
     const engineFrame = this.bank.map.toEngine(frame)
     this.auditionFrame = frame
     this.lastTick = { frame: engineFrame, time: this.sily.ctx.currentTime }
-    this.sily.send({ type: 'audition', source: 0, from: engineFrame })
+    this.sily.send({ type: 'audition', source: this.bank.index, from: engineFrame })
   }
 
   stopAudition() {
     this.auditionFrame = null
-    this.sily?.send({ type: 'audition', source: 0, from: null })
+    this.sily?.send({ type: 'audition', source: this.bank.index, from: null })
   }
 
   markAtKey(timeStamp: number) {
@@ -826,7 +833,7 @@ export class Session {
   addMarker(frame: number) {
     if (!this.bank.sample || this.bank.markers.includes(frame)) return
     this.checkpoint()
-    this.setMarkers([...this.bank.markers, frame])
+    this.setMarkers(this.bank, [...this.bank.markers, frame])
   }
 
   removeMarkerNear(frame: number, tolerance: number) {
@@ -836,39 +843,40 @@ export class Session {
     )
     if (nearest === null) return
     this.checkpoint()
-    this.setMarkers(this.bank.markers.filter((m) => m !== nearest))
+    this.setMarkers(this.bank, this.bank.markers.filter((m) => m !== nearest))
   }
 
   moveMarker(from: number, to: number): number {
     if (from === to || this.bank.markers.includes(to)) return from
     this.checkpoint('move-marker')
-    this.setMarkers(this.bank.markers.map((m) => (m === from ? to : m)))
+    this.setMarkers(this.bank, this.bank.markers.map((m) => (m === from ? to : m)))
     return to
   }
 
-  setMarkers(markers: number[], rebuildKit = false) {
+  private setMarkers(bank: Bank, markers: number[], rebuildKit = false) {
     this.adopt()
-    const len = this.bank.sample?.left.length ?? 0
-    const before = this.bank.markers
-    this.bank.markers = [...new Set(markers.map((m) => Math.max(0, Math.min(len - 1, Math.round(m)))))].sort((a, b) => a - b)
-    this.padSlices = followMarkers(before, this.bank.markers, this.padSlices)
-    this.kitPending = rebuildKit && this.bank.markers.length > PADS
-    this.sendMarkers()
-    this.invalidateStretched()
-    this.classifySlices()
+    const len = bank.sample?.left.length ?? 0
+    const before = bank.markers
+    bank.markers = [...new Set(markers.map((m) => Math.max(0, Math.min(len - 1, Math.round(m)))))].sort((a, b) => a - b)
+    this.padSlices = withBank(this.padSlices, bank.index, followMarkers(before, bank.markers, inBank(this.padSlices, bank.index)))
+    bank.kitPending = rebuildKit && bank.markers.length > BANK_PADS
+    this.sendMarkers(bank)
+    this.invalidateStretched(this.padsOf(bank))
+    this.classifySlices(bank)
   }
 
   labelOf(pad: number): Label | null {
     const own = this.pads[pad]?.sample
     if (own) return { category: own.category, confidence: 1, manual: true, scores: { [own.category]: 1 } }
     if (this.padSpans[pad]) return { category: 'upper', confidence: 1, manual: false, scores: { upper: 1 } }
-    const start = this.sliceStart(this.padSlices[pad])
-    return start === null ? null : (this.bank.labels[start] ?? null)
+    const bank = this.banks[bankOf(pad)]
+    const start = this.sliceStart(bank, this.padSlices[pad])
+    return start === null ? null : (bank.labels[start] ?? null)
   }
 
   setLabel(pad: number, category: Category) {
     if (this.padSpans[pad]) return
-    this.labelSlice(this.padSlices[pad], category)
+    this.labelSlice(this.banks[bankOf(pad)], this.padSlices[pad], category)
   }
 
   get sliceCount() {
@@ -876,7 +884,7 @@ export class Session {
   }
 
   sliceLabel(slice: number): Label | null {
-    const start = this.sliceStart(slice)
+    const start = this.sliceStart(this.bank, slice)
     return start === null ? null : (this.bank.labels[start] ?? null)
   }
 
@@ -905,26 +913,26 @@ export class Session {
     const slice = this.labelingSlice
     if (slice === null || slice === 0 || slice >= this.bank.markers.length) return
     this.checkpoint()
-    this.setMarkers(this.bank.markers.filter((_, i) => i !== slice))
+    this.setMarkers(this.bank, this.bank.markers.filter((_, i) => i !== slice))
     this.showLabelingSlice(slice - 1)
   }
 
   labelAndNext(category: Category) {
     if (this.labelingSlice === null) return
     const slice = this.labelingSlice
-    this.labelSlice(slice, category)
+    this.labelSlice(this.bank, slice, category)
     if (slice + 1 < this.sliceCount) this.showLabelingSlice(slice + 1)
     else this.stopLabeling()
   }
 
   labelingRange(): [number, number] | null {
-    const start = this.labelingSlice === null ? null : this.sliceStart(this.labelingSlice)
+    const start = this.labelingSlice === null ? null : this.sliceStart(this.bank, this.labelingSlice)
     if (start === null || !this.bank.sample) return null
     return [start, this.bank.markers[this.labelingSlice! + 1] ?? this.bank.sample.left.length]
   }
 
   playSlice(slice: number) {
-    const start = this.sliceStart(slice)
+    const start = this.sliceStart(this.bank, slice)
     if (start === null || !this.bank.sample) return
     const end = this.bank.markers[slice + 1] ?? this.bank.sample.left.length
     const rate = this.bank.sourceSpeed.mode === 'tape' ? this.bank.sourceSpeed.rate : 1
@@ -933,20 +941,20 @@ export class Session {
     this.labelingTimer = setTimeout(() => this.stopAudition(), Math.min(4000, ((end - start) / this.sampleRate / rate) * 1000))
   }
 
-  labelSlice(slice: number, category: Category) {
-    const start = this.sliceStart(slice)
+  private labelSlice(bank: Bank, slice: number, category: Category) {
+    const start = this.sliceStart(bank, slice)
     if (start === null) return
     this.checkpoint()
-    this.bank.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
+    bank.labels[start] = { category, confidence: 1, manual: true, scores: { [category]: 1 } }
     this.autoChoke()
     this.shapePads()
-    const features = this.bank.features.get(start)
+    const features = bank.features.get(start)
     if (features) {
       const corrections = [...readCorrections(), { features, label: category }]
       writeCorrections(corrections)
       this.correctionCount = corrections.length
     }
-    this.sendCorrection(slice, category)
+    this.sendCorrection(bank, slice, category)
   }
 
   async flushCorrections() {
@@ -981,13 +989,14 @@ export class Session {
     writeRefused()
   }
 
-  private sendCorrection(slice: number, label: Category) {
-    const start = this.sliceStart(slice)
-    if (start === null || !this.bank.sample || this.correctionsRefused) return
-    const end = this.bank.markers[slice + 1] ?? this.bank.sample.left.length
-    const wav = encodeWav24(this.bank.sample.left.subarray(start, end), this.bank.sample.right.subarray(start, end), this.sampleRate)
-    this.sent.set(this.bank.sample, [...(this.sent.get(this.bank.sample) ?? []), { wav, label }])
-    this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.bank.sample) })
+  private sendCorrection(bank: Bank, slice: number, label: Category) {
+    const start = this.sliceStart(bank, slice)
+    const sample = bank.sample
+    if (start === null || !sample || this.correctionsRefused) return
+    const end = bank.markers[slice + 1] ?? sample.left.length
+    const wav = encodeWav24(sample.left.subarray(start, end), sample.right.subarray(start, end), this.sampleRate)
+    this.sent.set(sample, [...(this.sent.get(sample) ?? []), { wav, label }])
+    this.unsentCorrections.push({ wav, label, split: this.splitToSend(sample, bank.heldOut) })
     this.correctionsUnsent = this.unsentCorrections.length
     void this.flushCorrections()
   }
@@ -996,14 +1005,13 @@ export class Session {
     this.bank.heldOut = heldOut
     if (!this.bank.sample || this.correctionsRefused) return
     for (const { wav, label } of this.sent.get(this.bank.sample) ?? []) {
-      this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.bank.sample) })
+      this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.bank.sample, heldOut) })
     }
     this.correctionsUnsent = this.unsentCorrections.length
     void this.flushCorrections()
   }
 
-  private splitToSend(sample: Sample): Promise<Split> {
-    const heldOut = this.bank.heldOut
+  private splitToSend(sample: Sample, heldOut: boolean): Promise<Split> {
     return this.splitOf(sample).then((byHash) => chooseSplit(byHash, heldOut))
   }
 
@@ -1023,70 +1031,76 @@ export class Session {
 
   arrangePads() {
     this.checkpoint()
-    const free = this.freePads().filter((pad) => !this.padSpans[pad])
+    const bank = this.bank
+    const b = bank.index
+    const free = this.freePads(bank).filter((pad) => !this.padSpans[pad])
     const arranged = arrangePads(
       free.map((pad) => this.padSlices[pad]),
       (slice) => {
-        const start = this.sliceStart(slice)
-        return start === null ? null : (this.bank.labels[start]?.category ?? null)
+        const start = this.sliceStart(bank, slice)
+        return start === null ? null : (bank.labels[start]?.category ?? null)
       },
     )
-    const after = [...this.padSlices]
-    free.forEach((pad, i) => (after[pad] = arranged[i]))
-    this.events = remapEvents(this.events, this.padSlices, after)
-    this.applyPadSlices(after)
+    const before = inBank(this.padSlices, b)
+    const after = [...before]
+    free.forEach((pad, i) => (after[pad - b * BANK_PADS] = arranged[i]))
+    this.events = mapBankEvents(this.events, b, (local) => remapEvents(local, before, after))
+    this.applyPadSlices(bank, after)
   }
 
   buildKit() {
     this.checkpoint()
-    void this.applyKit()
+    void this.applyKit(this.bank)
   }
 
-  private applyKit(): Promise<void> {
-    const sample = this.bank.sample
+  private applyKit(bank: Bank): Promise<void> {
+    const sample = bank.sample
     if (!sample) return Promise.resolve()
-    const count = Math.min(Math.max(1, this.bank.markers.length), MAX_CLASSIFIED)
+    const count = Math.min(Math.max(1, bank.markers.length), MAX_CLASSIFIED)
     const candidates = Array.from({ length: count }, (_, slice): KitCandidate => {
-      const start = this.sliceStart(slice)!
-      const end = this.bank.markers[slice + 1] ?? sample.left.length
+      const start = this.sliceStart(bank, slice)!
+      const end = bank.markers[slice + 1] ?? sample.left.length
       return {
         slice,
-        scores: this.bank.labels[start]?.scores ?? {},
+        scores: bank.labels[start]?.scores ?? {},
         quality: sliceQuality(sample.mono, start, end, this.sampleRate),
-        embedding: this.bank.embeddings.get(`${start}:${end}`),
+        embedding: bank.embeddings.get(`${start}:${end}`),
       }
     })
     const kit = buildKit(candidates)
-    const after = [...this.padSlices]
-    const free = this.freePads()
-    this.padSpans = this.padSpans.map((span, pad) => (free.includes(pad) ? null : span))
-    const taken = new Set(this.padSlices.filter((_, pad) => !free.includes(pad)))
+    const b = bank.index
+    const base = b * BANK_PADS
+    const before = inBank(this.padSlices, b)
+    const after = [...before]
+    const free = this.freePads(bank).map((pad) => pad - base)
+    this.padSpans = this.padSpans.map((span, pad) => (bankOf(pad) === b && free.includes(pad - base) ? null : span))
+    const taken = new Set(before.filter((_, pad) => !free.includes(pad)))
     const picks = kit.filter((slice) => !taken.has(slice))
     free.forEach((pad, i) => (after[pad] = picks[i]))
-    this.events = dropUnplacedEvents(this.events, this.padSlices, after)
-    this.applyPadSlices(after)
-    this.sendMarkers()
-    return this.placePhrases()
+    this.events = mapBankEvents(this.events, b, (local) => dropUnplacedEvents(local, before, after))
+    this.applyPadSlices(bank, after)
+    this.sendMarkers(bank)
+    return this.placePhrases(bank)
   }
 
-  private async placePhrases() {
-    const sample = this.bank.sample
+  private async placePhrases(bank: Bank) {
+    const sample = bank.sample
     const sily = this.sily
     if (!sample || !sily) return
-    const bpm = this.bank.sourceBpm ?? this.estimateSourceBpm()
+    const bpm = bank.sourceBpm ?? this.estimateSourceBpm(bank)
     if (!bpm) return
-    const token = ++this.phraseToken
-    const kicks = Object.entries(this.bank.labels).flatMap(([start, l]) => (roleOf(l.category) === 'kick' ? [Number(start)] : []))
-    const grid = beatGrid({ onsets: this.bank.markers, kicks, frames: sample.left.length, sampleRate: this.sampleRate, bpm })
+    const token = ++bank.phraseToken
+    const kicks = Object.entries(bank.labels).flatMap(([start, l]) => (roleOf(l.category) === 'kick' ? [Number(start)] : []))
+    const grid = beatGrid({ onsets: bank.markers, kicks, frames: sample.left.length, sampleRate: this.sampleRate, bpm })
     const candidates: PhraseCandidate[] = []
     try {
       for (const range of phraseRanges(grid, sample.left.length).slice(0, MAX_PHRASE_CANDIDATES)) {
         const key = `${range[0]}:${range[1]}`
-        let embedding = this.bank.embeddings.get(key)
+        let embedding = bank.embeddings.get(key)
         if (!embedding) {
           embedding = await this.clap.embed(sample.mono.subarray(range[0], range[1]), this.sampleRate)
-          if (token !== this.phraseToken || sample !== this.bank.sample) return
-          this.bank.embeddings.set(key, embedding)
+          if (token !== bank.phraseToken || sample !== bank.sample) return
+          bank.embeddings.set(key, embedding)
         }
         const { features } = sily.classify(sample.mono.subarray(range[0], range[1]))
         candidates.push({ range, embedding, upper: probeScores(probe as Probe, [...embedding, ...features]).upper ?? 0 })
@@ -1096,19 +1110,20 @@ export class Session {
       return
     }
     const picked = pickPhrases(candidates, UPPER_PADS.length)
-    const free = this.freePads()
-    const placed = UPPER_PADS.filter((pad, i) => free.includes(pad) && picked[i])
+    const base = bank.index * BANK_PADS
+    const free = this.freePads(bank)
+    const placed = UPPER_PADS.filter((pad, i) => free.includes(base + pad) && picked[i]).map((pad) => base + pad)
     if (placed.length === 0) return
-    this.padSpans = this.padSpans.map((span, pad) => (placed.includes(pad) ? picked[UPPER_PADS.indexOf(pad)] : span))
-    this.sendMarkers()
+    this.padSpans = this.padSpans.map((span, pad) => (placed.includes(pad) ? picked[UPPER_PADS.indexOf(pad - base)] : span))
+    this.sendMarkers(bank)
     this.autoChoke()
     this.shapePads()
     this.syncEvents()
     this.invalidateStretched(placed)
   }
 
-  private freePads(): number[] {
-    return this.pads.flatMap((p, pad) => (p.sample ? [] : [pad]))
+  private freePads(bank: Bank): number[] {
+    return this.padsOf(bank).filter((pad) => !this.pads[pad].sample)
   }
 
   hasSound(pad: number): boolean {
@@ -1128,7 +1143,7 @@ export class Session {
     if (!audio) return
     const p = this.pads[pad]
     const category = this.labelOf(pad)?.category ?? 'perc'
-    const name = p.sample?.name ?? `${this.bank.sample?.name ?? 'sample'} ${pad + 1}`
+    const name = p.sample?.name ?? `${this.banks[bankOf(pad)].sample?.name ?? 'sample'} ${pad + 1}`
     try {
       await navigator.storage?.persist?.()
       await saveSample({
@@ -1181,41 +1196,48 @@ export class Session {
     const own = this.own.get(pad)
     if (own) return own
     const range = this.sliceRange(pad)
-    if (!range || !this.bank.sample) return null
-    return { left: this.bank.sample.left.subarray(...range), right: this.bank.sample.right.subarray(...range) }
+    const sample = this.banks[bankOf(pad)].sample
+    if (!range || !sample) return null
+    return { left: sample.left.subarray(...range), right: sample.right.subarray(...range) }
   }
 
   assignSliceAt(frame: number) {
-    if (!this.bank.sample) return
+    const bank = this.bank
+    const b = bank.index
+    if (!bank.sample || bankOf(this.selectedPad) !== b) return
     if (this.pads[this.selectedPad].sample) this.clearPadSample(this.selectedPad)
     this.checkpoint()
-    const slice = Math.max(0, this.bank.markers.findLastIndex((m) => m <= frame))
-    const after = [...this.padSlices]
+    const slice = Math.max(0, bank.markers.findLastIndex((m) => m <= frame))
+    const selected = this.selectedPad - b * BANK_PADS
+    const before = inBank(this.padSlices, b)
+    const after = [...before]
     const other = after.indexOf(slice)
-    if (other >= 0) after[other] = after[this.selectedPad]
-    after[this.selectedPad] = slice
-    this.events = dropUnplacedEvents(this.events, this.padSlices, after)
-    this.applyPadSlices(after)
+    if (other >= 0) after[other] = after[selected]
+    after[selected] = slice
+    this.events = mapBankEvents(this.events, b, (local) => dropUnplacedEvents(local, before, after))
+    this.applyPadSlices(bank, after)
   }
 
-  private applyPadSlices(after: number[]) {
+  private applyPadSlices(bank: Bank, after: number[]) {
     this.adopt()
-    const before = this.padSlices
-    const fresh = freshPad
-    this.pads = after.map((slice) => (before.includes(slice) ? this.pads[before.indexOf(slice)] : fresh()))
-    this.selectedPad = Math.max(0, after.indexOf(before[this.selectedPad]))
-    this.padSlices = after
+    const b = bank.index
+    const base = b * BANK_PADS
+    const before = inBank(this.padSlices, b)
+    const pads = inBank(this.pads, b)
+    this.pads = withBank(this.pads, b, after.map((slice) => (before.includes(slice) ? pads[before.indexOf(slice)] : freshPad())))
+    if (bankOf(this.selectedPad) === b) this.selectedPad = base + Math.max(0, after.indexOf(before[this.selectedPad - base]))
+    this.padSlices = withBank(this.padSlices, b, after)
     this.autoChoke()
     this.shapePads()
-    this.sily?.send({ type: 'padSlices', slices: [...after] })
+    this.sily?.send({ type: 'padSlices', slices: [...this.padSlices] })
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
-    this.invalidateStretched()
+    this.invalidateStretched(this.padsOf(bank))
   }
 
   clearMarkers() {
     this.checkpoint()
-    this.setMarkers([])
+    this.setMarkers(this.bank, [])
   }
 
   undo() {
@@ -1251,8 +1273,9 @@ export class Session {
     this.pads.forEach((p, pad) => {
       if (p.sample) return
       const label = this.labelOf(pad)
-      const start = this.padSpans[pad] ? null : this.sliceStart(this.padSlices[pad])
-      const features = start === null ? undefined : this.bank.features.get(start)
+      const bank = this.banks[bankOf(pad)]
+      const start = this.padSpans[pad] ? null : this.sliceStart(bank, this.padSlices[pad])
+      const features = start === null ? undefined : bank.features.get(start)
       let changed = false
       if (p.pitchAuto) {
         const pitch =
@@ -1315,11 +1338,10 @@ export class Session {
       patterns: this.allPatterns(),
       currentPattern: this.currentPattern,
       song: this.song,
-      markers: this.bank.markers,
+      banks: this.banks.map(({ markers, labels }) => ({ markers, labels })),
       padSlices: this.padSlices,
       padSpans: this.padSpans,
       pads: this.pads,
-      labels: this.bank.labels,
     }) as Doc
   }
 
@@ -1332,18 +1354,20 @@ export class Session {
     this.bars = doc.patterns.find((p) => p.name === doc.currentPattern)?.bars ?? this.bars
     if (this.song.length === 0) this.songMode = false
     this.syncTransport()
-    this.bank.markers = doc.markers
+    this.banks.forEach((bank, b) => {
+      bank.markers = doc.banks[b].markers
+      bank.labels = doc.banks[b].labels
+      bank.kitPending = false
+    })
     this.padSlices = doc.padSlices
     this.padSpans = doc.padSpans
     this.pads = doc.pads
-    this.bank.labels = doc.labels
-    this.kitPending = false
     this.syncOwn()
-    this.sendMarkers()
+    this.banks.forEach((bank) => this.sendMarkers(bank))
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.syncEvents()
     this.invalidateStretched()
-    this.classifySlices()
+    this.banks.forEach((bank) => this.classifySlices(bank))
   }
 
   private syncOwn() {
@@ -1368,15 +1392,15 @@ export class Session {
     })
   }
 
-  generateCandidates() {
-    if (!this.bank.sample || this.songMode) return
-    const secondsPerFrame = 1 / this.sampleRate / this.bank.sourceSpeed.rate
+  generateCandidates(bank = this.bank) {
+    if (!bank.sample || this.songMode) return
+    const secondsPerFrame = 1 / this.sampleRate / bank.sourceSpeed.rate
     const pads: PadInfo[] = []
-    this.padSlices.forEach((_, pad) => {
+    for (const pad of this.padsOf(bank)) {
       const own = this.own.get(pad)
       const range = this.sliceRange(pad)
       const label = this.labelOf(pad)
-      if ((!own && !range) || !label) return
+      if ((!own && !range) || !label) continue
       const seconds = own ? own.left.length / this.sampleRate : (range![1] - range![0]) * secondsPerFrame
       pads.push({
         pad,
@@ -1384,21 +1408,26 @@ export class Session {
         beats: (seconds * this.bpm) / 60,
         scores: label.scores,
       })
-    })
+    }
     if (!this.beforeGenerate) this.checkpoint()
     this.beforeGenerate ??= this.events
+    const others = this.beforeGenerate.filter((e) => bankOf(e.pad) !== bank.index)
+    const existing = this.beforeGenerate.filter((e) => bankOf(e.pad) === bank.index)
     const base = Math.floor(Math.random() * 1e9)
     this.candidates = candidateStyles(this.style, this.bpm, CANDIDATES).map((style, i) => ({
       style,
-      events: generate({
-        pads,
-        existing: this.beforeGenerate!,
-        style,
-        density: this.density,
-        looseness: this.looseness,
-        lengthBeats: this.patternBeats,
-        seed: base + i,
-      }),
+      events: [
+        ...others,
+        ...generate({
+          pads,
+          existing,
+          style,
+          density: this.density,
+          looseness: this.looseness,
+          lengthBeats: this.patternBeats,
+          seed: base + i,
+        }),
+      ],
     }))
     this.preview(0)
   }
@@ -1451,66 +1480,67 @@ export class Session {
     return this.playbackEvents().map(({ beat, pad, velocity, nudge, pitch }) => ({ beat, pad, velocity, nudge, pitch }))
   }
 
-  private sliceStart(slice: number): number | null {
-    if (!this.bank.sample) return null
-    if (this.bank.markers.length === 0) return slice === 0 ? 0 : null
-    return this.bank.markers[slice] ?? null
+  private sliceStart(bank: Bank, slice: number): number | null {
+    if (!bank.sample) return null
+    if (bank.markers.length === 0) return slice === 0 ? 0 : null
+    return bank.markers[slice] ?? null
   }
 
-  private classifySlices() {
-    clearTimeout(this.classifyTimer)
-    this.classifyTimer = setTimeout(() => this.classifyNow(), CLASSIFY_DELAY_MS)
+  private classifySlices(bank: Bank) {
+    clearTimeout(bank.classifyTimer)
+    bank.classifyTimer = setTimeout(() => this.classifyNow(bank), CLASSIFY_DELAY_MS)
   }
 
-  private classifyNow() {
-    if (!this.sily || !this.bank.sample) return
-    const count = Math.max(1, this.bank.markers.length)
+  private classifyNow(bank: Bank) {
+    const sample = bank.sample
+    if (!this.sily || !sample) return
+    const count = Math.max(1, bank.markers.length)
     const labels: Record<number, Label> = {}
     for (let slice = 0; slice < Math.min(count, MAX_CLASSIFIED); slice++) {
-      const start = this.sliceStart(slice)!
-      const end = this.bank.markers[slice + 1] ?? this.bank.sample.left.length
-      const previous = this.bank.labels[start]
+      const start = this.sliceStart(bank, slice)!
+      const end = bank.markers[slice + 1] ?? sample.left.length
+      const previous = bank.labels[start]
       if (previous?.manual) {
         labels[start] = previous
         continue
       }
-      const result = this.sily.classify(this.bank.sample.mono.subarray(start, end))
-      this.bank.features.set(start, result.features)
+      const result = this.sily.classify(sample.mono.subarray(start, end))
+      bank.features.set(start, result.features)
       labels[start] = { category: result.category, confidence: result.confidence, manual: false, scores: result.scores }
     }
-    this.bank.labels = labels
+    bank.labels = labels
     this.autoChoke()
     this.shapePads()
-    this.refineWithClap()
+    this.refineWithClap(bank)
   }
 
-  private async refineWithClap() {
-    const sample = this.bank.sample
+  private async refineWithClap(bank: Bank) {
+    const sample = bank.sample
     if (!sample) return
-    const generation = ++this.refineGeneration
-    const targets = Array.from({ length: Math.min(Math.max(1, this.bank.markers.length), MAX_CLASSIFIED) }, (_, slice) => ({
-      start: this.sliceStart(slice)!,
-      end: this.bank.markers[slice + 1] ?? sample.left.length,
+    const generation = ++bank.refineGeneration
+    const targets = Array.from({ length: Math.min(Math.max(1, bank.markers.length), MAX_CLASSIFIED) }, (_, slice) => ({
+      start: this.sliceStart(bank, slice)!,
+      end: bank.markers[slice + 1] ?? sample.left.length,
     })).filter(({ start, end }) => end > start)
-    this.refining = true
-    this.refined = 0
-    this.refineTotal = targets.length
+    bank.refining = true
+    bank.refined = 0
+    bank.refineTotal = targets.length
     try {
       for (const [i, { start, end }] of targets.entries()) {
-        this.refined = i
+        bank.refined = i
         const key = `${start}:${end}`
-        let embedding = this.bank.embeddings.get(key)
+        let embedding = bank.embeddings.get(key)
         if (!embedding) {
           embedding = await this.clap.embed(sample.mono.subarray(start, end), this.sampleRate)
-          if (generation !== this.refineGeneration) return
-          this.bank.embeddings.set(key, embedding)
+          if (generation !== bank.refineGeneration) return
+          bank.embeddings.set(key, embedding)
         }
-        const current = this.bank.labels[start]
-        const features = this.bank.features.get(start)
+        const current = bank.labels[start]
+        const features = bank.features.get(start)
         if (!current || current.manual || !features) continue
         const scores = probeScores(probe as Probe, [...embedding, ...features])
         const [category, confidence] = Object.entries(scores).reduce((a, b) => (b[1] > a[1] ? b : a)) as [Category, number]
-        this.bank.labels[start] = { category, confidence, manual: false, scores }
+        bank.labels[start] = { category, confidence, manual: false, scores }
       }
       this.autoChoke()
       this.shapePads()
@@ -1518,11 +1548,11 @@ export class Session {
       console.error(error)
       this.message = '音を聞き分けるモデルを読み込めなかった'
     } finally {
-      if (generation === this.refineGeneration) {
-        this.refining = false
-        if (this.kitPending) {
-          this.kitPending = false
-          void this.applyKit().then(() => this.finishBuild())
+      if (generation === bank.refineGeneration) {
+        bank.refining = false
+        if (bank.kitPending) {
+          bank.kitPending = false
+          void this.applyKit(bank).then(() => this.finishBuild(bank))
         }
       }
     }
@@ -1530,11 +1560,11 @@ export class Session {
 
   setSourceSpeed(patch: Partial<SourceSpeed>) {
     this.bank.sourceSpeed = { ...this.bank.sourceSpeed, ...patch }
-    this.applySource()
+    this.applySource(this.bank)
   }
 
   matchBpm(mode: SourceSpeed['mode']) {
-    const sourceBpm = this.bank.sourceBpm ?? this.estimateSourceBpm()
+    const sourceBpm = this.bank.sourceBpm ?? this.estimateSourceBpm(this.bank)
     if (!sourceBpm) return
     this.setSourceSpeed({ mode, rate: rateForBpm(this.bpm, sourceBpm) })
   }
@@ -1542,78 +1572,85 @@ export class Session {
   detectOnsets() {
     if (!this.sily || !this.bank.sample) return
     this.checkpoint()
-    this.sliceByOnsets()
+    this.sliceByOnsets(this.bank)
   }
 
-  private buildFromSource() {
-    this.detectBpm()
-    this.sliceByOnsets()
-    this.kitPending = true
-    this.playWhenBuilt = true
+  private buildFromSource(bank: Bank) {
+    if (this.leads(bank)) this.detectBpm(bank)
+    else this.estimateSourceBpm(bank)
+    this.sliceByOnsets(bank)
+    bank.kitPending = true
+    if (this.leads(bank)) this.playWhenBuilt = true
   }
 
   scaleSourceBpm(factor: number) {
-    if (!this.bank.sample || !this.bank.sourceBpm) return
+    const bank = this.bank
+    if (!bank.sample || !bank.sourceBpm) return
     this.checkpoint()
-    this.bank.sourceBpm = Math.round(this.bank.sourceBpm * factor * 10) / 10
-    this.bpm = Math.round(this.bank.sourceBpm * this.bank.sourceSpeed.rate * 10) / 10
-    this.syncTransport()
-    this.sliceByOnsets()
-    this.kitPending = true
-    this.playWhenBuilt = true
+    bank.sourceBpm = Math.round(bank.sourceBpm * factor * 10) / 10
+    if (this.leads(bank)) {
+      this.bpm = Math.round(bank.sourceBpm * bank.sourceSpeed.rate * 10) / 10
+      this.syncTransport()
+      this.playWhenBuilt = true
+    }
+    this.sliceByOnsets(bank)
+    bank.kitPending = true
   }
 
-  private finishBuild() {
-    if (!this.playWhenBuilt) return
+  private finishBuild(bank: Bank) {
+    if (!this.playWhenBuilt || !this.leads(bank)) return
     this.playWhenBuilt = false
-    this.generateCandidates()
+    this.generateCandidates(bank)
     if (!this.playing && this.candidates.length > 0) this.togglePlaying()
   }
 
-  private sliceByOnsets() {
-    if (!this.sily || !this.bank.sample) return
-    const gap = minSliceSeconds(this.bank.sourceBpm ?? this.estimateSourceBpm())
-    this.setMarkers(this.sily.onsets(this.bank.sample.mono, this.sensitivity, gap).slice(0, MAX_CLASSIFIED), true)
+  private sliceByOnsets(bank: Bank) {
+    if (!this.sily || !bank.sample) return
+    const gap = minSliceSeconds(bank.sourceBpm ?? this.estimateSourceBpm(bank))
+    this.setMarkers(bank, this.sily.onsets(bank.sample.mono, this.sensitivity, gap).slice(0, MAX_CLASSIFIED), true)
   }
 
   gridSlice(count: number) {
-    if (!this.bank.sample) return
+    const bank = this.bank
+    if (!bank.sample) return
     this.checkpoint()
-    const start = this.bank.markers[0] ?? 0
-    const end = this.bank.sample.left.length
+    const start = bank.markers[0] ?? 0
+    const end = bank.sample.left.length
     this.setMarkers(
+      bank,
       Array.from({ length: count }, (_, i) => start + ((end - start) * i) / count),
       true,
     )
   }
 
-  detectBpm() {
-    const sourceBpm = this.estimateSourceBpm()
+  detectBpm(bank = this.bank) {
+    const sourceBpm = this.estimateSourceBpm(bank)
     if (!sourceBpm) return
-    this.bpm = Math.round(sourceBpm * this.bank.sourceSpeed.rate * 10) / 10
+    this.bpm = Math.round(sourceBpm * bank.sourceSpeed.rate * 10) / 10
     this.syncTransport()
   }
 
-  private estimateSourceBpm(): number | null {
-    if (!this.sily || !this.bank.sample) return null
-    const bpm = this.sily.bpm(this.bank.sample.mono)
+  private estimateSourceBpm(bank: Bank): number | null {
+    if (!this.sily || !bank.sample) return null
+    const bpm = this.sily.bpm(bank.sample.mono)
     if (!bpm) {
       this.message = 'BPM を推定できなかった'
       return null
     }
-    this.bank.sourceBpm = Math.round(bpm * 10) / 10
-    return this.bank.sourceBpm
+    bank.sourceBpm = Math.round(bpm * 10) / 10
+    return bank.sourceBpm
   }
 
   sliceRange(pad: number): [number, number] | null {
-    if (!this.bank.sample) return null
+    const bank = this.banks[bankOf(pad)]
+    if (!bank?.sample) return null
     const span = this.padSpans[pad]
     if (span) return span
     const slice = this.padSlices[pad]
-    const len = this.bank.sample.left.length
-    if (this.bank.markers.length === 0) return slice === 0 ? [0, len] : null
-    if (slice >= this.bank.markers.length) return null
-    return [this.bank.markers[slice], this.bank.markers[slice + 1] ?? len]
+    const len = bank.sample.left.length
+    if (bank.markers.length === 0) return slice === 0 ? [0, len] : null
+    if (slice >= bank.markers.length) return null
+    return [bank.markers[slice], bank.markers[slice + 1] ?? len]
   }
 
   padDown(pad: number, timeStamp: number, velocity = 1) {
@@ -1661,8 +1698,9 @@ export class Session {
   midiNoteDown(note: number, velocity: number, timeStamp: number) {
     if (this.labelingSlice !== null) return
     if (this.keyboardMode) return this.noteDown(semitonesForMidiNote(note), timeStamp, velocity)
-    const pad = padForMidiNote(note)
-    if (pad === undefined) return
+    const local = padForMidiNote(note)
+    if (local === undefined) return
+    const pad = this.bankBase + local
     this.midiHeld.set(note, pad)
     this.padDown(pad, timeStamp, velocity)
   }
@@ -1784,22 +1822,28 @@ export class Session {
   }
 
   async exportWav(loops: number) {
-    if (!this.sily || !this.bank.sample) return
+    const named = this.banks.find((b) => b.sample)?.sample
+    if (!this.sily || !named) return
     while (this.inflight.size > 0) await Promise.allSettled([...this.inflight])
     const loopSeconds = (this.lengthBeats * 60) / this.bpm
     const { left, right } = await this.sily.renderOffline(this.snapshot(loops), loops * loopSeconds + EXPORT_TAIL_SECONDS)
     const frames = soundingLength([left, right], Math.round(loops * loopSeconds * this.sampleRate), SILENCE)
     const wav = encodeWav24(left.subarray(0, frames), right.subarray(0, frames), this.sampleRate)
-    const name = this.bank.sample.name.replace(/\.[^.]+$/, '')
+    const name = named.name.replace(/\.[^.]+$/, '')
     download(new Blob([wav], { type: 'audio/wav' }), this.songMode ? `${name}-${this.bpm}bpm-song.wav` : `${name}-${this.bpm}bpm-${loops}x.wav`)
   }
 
   private snapshot(loops: number): ToWorklet[] {
-    const { left, right } = this.bank.engineSample!
     return [
-      { type: 'load', source: 0, left, right },
-      { type: 'sourceRate', source: 0, rate: this.bank.sourceSpeed.mode === 'tape' ? this.bank.sourceSpeed.rate : 1 },
-      { type: 'markers', source: 0, frames: this.bank.markers.map((m) => this.bank.map.toEngine(m)) },
+      ...this.banks.flatMap((bank): ToWorklet[] =>
+        bank.engineSample
+          ? [
+              { type: 'load', source: bank.index, left: bank.engineSample.left, right: bank.engineSample.right },
+              { type: 'sourceRate', source: bank.index, rate: this.tapeRate(bank) },
+              { type: 'markers', source: bank.index, frames: bank.markers.map((m) => bank.map.toEngine(m)) },
+            ]
+          : [],
+      ),
       { type: 'padSlices', slices: [...this.padSlices] },
       { type: 'padSpans', spans: this.engineSpans() },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
@@ -1814,21 +1858,25 @@ export class Session {
     ]
   }
 
-  private async applySource() {
-    if (!this.sily || !this.bank.sample) return
-    const { mode, rate } = this.bank.sourceSpeed
+  private tapeRate(bank: Bank) {
+    return bank.sourceSpeed.mode === 'tape' ? bank.sourceSpeed.rate : 1
+  }
+
+  private async applySource(bank: Bank) {
+    const sample = bank.sample
+    if (!this.sily || !sample) return
+    const { mode, rate } = bank.sourceSpeed
     const stretch = mode === 'stretch' && rate !== 1 ? rate : null
-    const token = ++this.sourceToken
-    if (stretch !== this.bank.loadedStretch) {
-      const sample = this.bank.sample
+    const token = ++bank.sourceToken
+    if (stretch !== bank.loadedStretch) {
       const out = stretch ? await this.track(this.sily.stretch(sample.left, sample.right, 1 / stretch)) : sample
-      if (token !== this.sourceToken || sample !== this.bank.sample) return
-      this.stopAudition()
-      this.loadEngineSample(out.left, out.right, stretch)
-      this.sendMarkers()
+      if (token !== bank.sourceToken || sample !== bank.sample) return
+      if (bank === this.bank) this.stopAudition()
+      this.loadEngineSample(bank, out.left, out.right, stretch)
+      this.sendMarkers(bank)
     }
-    this.sily.send({ type: 'sourceRate', source: 0, rate: mode === 'tape' ? rate : 1 })
-    this.invalidateStretched()
+    this.sily.send({ type: 'sourceRate', source: bank.index, rate: this.tapeRate(bank) })
+    this.invalidateStretched(this.padsOf(bank))
   }
 
   private track<T>(job: Promise<T>): Promise<T> {
@@ -1840,21 +1888,24 @@ export class Session {
     })
   }
 
-  private loadEngineSample(left: Float32Array, right: Float32Array, stretch: number | null) {
-    this.bank.engineSample = { left, right }
-    this.bank.loadedStretch = stretch
-    this.bank.map = new SourceMap(this.bank.sample?.left.length ?? left.length, left.length)
-    this.sily?.send({ type: 'load', source: 0, left: left.slice(), right: right.slice() })
+  private loadEngineSample(bank: Bank, left: Float32Array, right: Float32Array, stretch: number | null) {
+    bank.engineSample = { left, right }
+    bank.loadedStretch = stretch
+    bank.map = new SourceMap(bank.sample?.left.length ?? left.length, left.length)
+    this.sily?.send({ type: 'load', source: bank.index, left: left.slice(), right: right.slice() })
   }
 
-  private sendMarkers() {
-    this.sily?.send({ type: 'markers', source: 0, frames: this.bank.markers.map((m) => this.bank.map.toEngine(m)) })
+  private sendMarkers(bank: Bank) {
+    this.sily?.send({ type: 'markers', source: bank.index, frames: bank.markers.map((m) => bank.map.toEngine(m)) })
     this.sily?.send({ type: 'padSlices', slices: [...this.padSlices] })
     this.sily?.send({ type: 'padSpans', spans: this.engineSpans() })
   }
 
   private engineSpans(): Span[] {
-    return this.padSpans.map((span) => (span ? [this.bank.map.toEngine(span[0]), this.bank.map.toEngine(span[1])] : null))
+    return this.padSpans.map((span, pad) => {
+      const { map } = this.banks[bankOf(pad)]
+      return span ? [map.toEngine(span[0]), map.toEngine(span[1])] : null
+    })
   }
 
   private invalidateStretched(only?: number[]) {
@@ -1868,20 +1919,21 @@ export class Session {
   }
 
   private fillStretched() {
-    if (!this.sily || !this.bank.engineSample) return
+    if (!this.sily) return
     const sily = this.sily
-    const source = this.bank.engineSample
     const version = this.stretchVersion
-    const tapeSemitones = this.bank.sourceSpeed.mode === 'tape' ? rateToSemitones(this.bank.sourceSpeed.rate) : 0
     this.pads.forEach((p, pad) => {
+      const bank = this.banks[bankOf(pad)]
       const own = this.own.get(pad)
       const range = this.sliceRange(pad)
-      if (!p.stretch || (!own && !range)) return
+      const source = bank.engineSample
+      if (!p.stretch || (!own && !(range && source))) return
       const pitches = new Set([p.pitch, ...this.allPatterns().flatMap((pattern) => pattern.events).filter((e) => e.pad === pad).map((e) => p.pitch + e.pitch)])
       const audio = own ?? {
-        left: source.left.subarray(...range!.map((f) => this.bank.map.toEngine(f))),
-        right: source.right.subarray(...range!.map((f) => this.bank.map.toEngine(f))),
+        left: source!.left.subarray(...range!.map((f) => bank.map.toEngine(f))),
+        right: source!.right.subarray(...range!.map((f) => bank.map.toEngine(f))),
       }
+      const tapeSemitones = rateToSemitones(this.tapeRate(bank))
       const shift = own ? 0 : tapeSemitones
       const reverse = p.reverse
       for (const pitch of pitches) {
