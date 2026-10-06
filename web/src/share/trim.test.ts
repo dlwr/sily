@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { trimSource, type TrimInput } from './trim'
+import { trimBanks, trimSource, type BanksTrimInput, type TrimInput } from './trim'
 
 const input = (over: Partial<TrimInput> = {}): TrimInput => ({
   frames: 1000,
@@ -76,5 +76,47 @@ describe('trimSource', () => {
   it('cuts inside a slice longer than the window', () => {
     const trim = trimSource(input({ markers: [0, 800], padSlices: [0, 1] }))
     expect([trim.start, trim.end]).toEqual([0, 300])
+  })
+})
+
+describe('trimBanks', () => {
+  const PER_BANK = 3
+  const bank = { markers: [0, 100, 200, 300, 400, 500, 600, 700, 800, 900], labels: {} }
+  const banksInput = (over: Partial<BanksTrimInput> = {}): BanksTrimInput => ({
+    bankPads: PER_BANK,
+    sources: [
+      { frames: 1000, maxFrames: 300 },
+      { frames: 1000, maxFrames: 300 },
+    ],
+    banks: [bank, bank],
+    padSlices: [0, 1, 2, 4, 5, 9],
+    padSpans: Array(6).fill(null),
+    ownPads: Array(6).fill(false),
+    ...over,
+  })
+
+  it('leaves the pads of one bank alone when trimming another', () => {
+    const trim = trimBanks(banksInput({ sources: [null, { frames: 1000, maxFrames: 300 }] }))
+    expect(trim.padSlices.slice(0, PER_BANK)).toEqual([0, 1, 2])
+  })
+
+  it('points the pads of a later bank at their trimmed slices', () => {
+    expect(trimBanks(banksInput()).padSlices.slice(PER_BANK)).toEqual([0, 1, 2])
+  })
+
+  it('counts detached pads across banks', () => {
+    expect(trimBanks(banksInput()).detached).toEqual([{ pad: 5, range: [900, 1000] }])
+  })
+
+  it('gives each bank the window of its source', () => {
+    expect(trimBanks(banksInput()).windows).toEqual([
+      [0, 300],
+      [400, 700],
+    ])
+  })
+
+  it('keeps a bank without a source as it is', () => {
+    const trim = trimBanks(banksInput({ sources: [null, null] }))
+    expect([trim.windows, trim.banks[1].markers]).toEqual([[null, null], bank.markers])
   })
 })

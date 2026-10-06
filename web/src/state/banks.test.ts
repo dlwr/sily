@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankOf, extendToBanks, inBank, mapBankEvents, PADS, readBanks, withBank, type BankState } from './banks'
+import { bankForSource, bankOf, extendToBanks, inBank, mapBankEvents, PADS, padName, readBanks, withBank, type BankState } from './banks'
 
 const label = { category: 'kick' as const, confidence: 1, manual: true, scores: { kick: 1 } }
 
@@ -90,3 +90,25 @@ describe('extendToBanks', () => {
   })
 })
 
+
+describe('padName', () => {
+  it('names a pad by its bank letter and its number in the bank', () => {
+    expect([0, 15, 16, 63].map(padName)).toEqual(['A1', 'A16', 'B1', 'D16'])
+  })
+})
+
+describe('bankForSource', () => {
+  const banks = (...filled: boolean[]) => filled.map((f) => ({ sample: f ? {} : null }))
+
+  it('fills the focused bank when it is empty', () => {
+    expect(bankForSource(banks(true, false, false, false), 1)).toBe(1)
+  })
+
+  it('takes the first empty bank when the focused one has a source', () => {
+    expect(bankForSource(banks(true, false, true, false), 2)).toBe(1)
+  })
+
+  it('replaces the focused bank when every bank has a source', () => {
+    expect(bankForSource(banks(true, true, true, true), 2)).toBe(2)
+  })
+})

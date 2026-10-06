@@ -9,6 +9,7 @@
   import SongBar from './components/SongBar.svelte'
   import SourceSpeed from './components/SourceSpeed.svelte'
   import Transport from './components/Transport.svelte'
+  import BankTabs from './components/BankTabs.svelte'
   import Waveform from './components/Waveform.svelte'
   import { labelForCode, noteForCode, padForCode } from './state/keymap'
   import { fetchShare, sharedIdFrom } from './share/api'
@@ -92,6 +93,12 @@
       case 'KeyM':
         session.markAtKey(e.timeStamp)
         return
+      case 'BracketLeft':
+        session.cycleBank(-1)
+        return
+      case 'BracketRight':
+        session.cycleBank(1)
+        return
     }
     if (e.code === 'KeyL' && !session.keyboardMode) {
       session.startLabeling()
@@ -171,6 +178,7 @@
   <Transport {session} />
   <main>
     <section class="source">
+      <BankTabs {session} />
       <div class="title">
         <h2>{session.bank.sample?.name ?? 'ソース'}</h2>
         {#if session.bank.sample}

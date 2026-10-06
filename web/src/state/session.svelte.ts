@@ -33,13 +33,13 @@ import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, recordRepeat,
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { Bank, type Label, type Sample } from './bank.svelte'
-import { BANK_PADS, BANKS, bankOf, extendToBanks, inBank, mapBankEvents, PADS, readBanks, withBank, type BankState } from './banks'
+import { BANK_PADS, BANKS, bankForSource, bankOf, extendToBanks, inBank, mapBankEvents, PADS, readBanks, withBank, type BankState } from './banks'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
 import { uploadShare } from '../share/api'
 import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../share/limits'
-import { trimSource } from '../share/trim'
+import { trimBanks } from '../share/trim'
 import { noteOff, noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
 
 export type { Label, Sample }
@@ -191,6 +191,29 @@ export class Session {
 
   get bankBase() {
     return this.focusedBank * BANK_PADS
+  }
+
+  focusBank(index: number) {
+    if (index === this.focusedBank || !this.banks[index]) return
+    this.stopLabeling()
+    this.stopAudition()
+    this.focusedBank = index
+    this.selectedPad = this.bankBase + (this.selectedPad % BANK_PADS)
+  }
+
+  private resetFocus() {
+    this.stopLabeling()
+    this.focusedBank = Math.max(0, this.banks.findIndex((b) => b.sample))
+    this.selectedPad = this.bankBase + (this.selectedPad % BANK_PADS)
+  }
+
+  cycleBank(delta: number) {
+    this.focusBank((this.focusedBank + delta + BANKS) % BANKS)
+  }
+
+  private bankForSource(): Bank {
+    this.focusBank(bankForSource(this.banks, this.focusedBank))
+    return this.bank
   }
 
   get patternBeats() {
@@ -439,6 +462,7 @@ export class Session {
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.sily?.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
     this.syncEvents()
+    this.resetFocus()
     this.lastSaved = ''
   }
 
@@ -548,6 +572,7 @@ export class Session {
       this.applySource(bank)
       this.classifySlices(bank)
     })
+    this.resetFocus()
     this.lastSaved = JSON.stringify(this.projectState())
   }
 
@@ -570,47 +595,45 @@ export class Session {
   private async shareBundle(): Promise<Bundle> {
     const bundle = await this.bundle()
     const st = bundle.project.state as ReturnType<Session['projectState']>
-    const padSlices = [...st.padSlices]
-    const padSpans = [...st.padSpans]
+    const trim = trimBanks({
+      bankPads: BANK_PADS,
+      sources: bundle.sources.map((s) => s && { frames: s.left.length, maxFrames: Math.floor(MAX_SOURCE_SECONDS * s.sampleRate) }),
+      banks: st.banks,
+      padSlices: st.padSlices,
+      padSpans: st.padSpans,
+      ownPads: st.pads.map((p) => !!p.sample),
+    })
     const pads = [...st.pads]
-    const detached: Bundle['samples'] = []
-    const banks = st.banks.map((saved, b) => {
-      const source = bundle.sources[b] ?? null
-      if (!source) return { saved, source }
-      const base = b * BANK_PADS
-      const trim = trimSource({
-        frames: source.left.length,
-        maxFrames: Math.floor(MAX_SOURCE_SECONDS * source.sampleRate),
-        markers: saved.markers,
-        padSlices: inBank(padSlices, b),
-        padSpans: inBank(padSpans, b),
-        labels: saved.labels,
-        ownPads: inBank(pads, b).map((p) => !!p.sample),
-      })
-      padSlices.splice(base, trim.padSlices.length, ...trim.padSlices)
-      padSpans.splice(base, trim.padSpans.length, ...trim.padSpans)
-      for (const { pad, range } of trim.detached) {
-        const audio = this.detachedAudio(this.banks[b], range)
-        const meta: SampleMeta = {
-          id: newId(),
-          name: `${source.name} ${pad + 1}`,
-          category: this.labelOf(base + pad)?.category ?? 'perc',
-          sampleRate: this.sampleRate,
-          frames: audio.left.length,
-          createdAt: Date.now(),
-          settings: {},
-        }
-        pads[base + pad] = { ...pads[base + pad], sample: { id: meta.id, name: meta.name, category: meta.category as Category } }
-        detached.push({ meta, ...audio })
+    const detached = trim.detached.map(({ pad, range }) => {
+      const bank = this.banks[bankOf(pad)]
+      const audio = this.detachedAudio(bank, range)
+      const meta: SampleMeta = {
+        id: newId(),
+        name: `${bank.sample?.name ?? 'sample'} ${(pad % BANK_PADS) + 1}`,
+        category: this.labelOf(pad)?.category ?? 'perc',
+        sampleRate: this.sampleRate,
+        frames: audio.left.length,
+        createdAt: Date.now(),
+        settings: {},
       }
-      return {
-        saved: { ...saved, markers: trim.markers, labels: trim.labels },
-        source: { ...source, left: source.left.slice(trim.start, trim.end), right: source.right.slice(trim.start, trim.end) },
-      }
+      pads[pad] = { ...pads[pad], sample: { id: meta.id, name: meta.name, category: meta.category as Category } }
+      return { meta, ...audio }
     })
     return {
-      project: { name: bundle.project.name, state: { ...st, banks: banks.map((b) => b.saved), padSlices, padSpans, pads } },
-      sources: banks.map((b) => b.source),
+      project: {
+        name: bundle.project.name,
+        state: {
+          ...st,
+          banks: st.banks.map((saved, b) => ({ ...saved, ...trim.banks[b] })),
+          padSlices: trim.padSlices,
+          padSpans: trim.padSpans,
+          pads,
+        },
+      },
+      sources: bundle.sources.map((source, b) => {
+        const window = trim.windows[b]
+        return source && window && { ...source, left: source.left.slice(...window), right: source.right.slice(...window) }
+      }),
       samples: [...bundle.samples, ...detached],
     }
   }
@@ -719,8 +742,9 @@ export class Session {
     try {
       const { left, right } = await this.sily.decode(file)
       if (token !== this.loadToken) return
-      this.setSample(this.bank, file.name, left, right)
-      this.buildFromSource(this.bank)
+      const bank = this.bankForSource()
+      this.setSample(bank, file.name, left, right)
+      this.buildFromSource(bank)
     } catch {
       this.message = `${file.name} を読み込めなかった`
     }
@@ -799,8 +823,9 @@ export class Session {
       return
     }
     if (left.length > 0) {
-      this.setSample(this.bank, `capture-${new Date().toLocaleTimeString()}`, left, right)
-      this.buildFromSource(this.bank)
+      const bank = this.bankForSource()
+      this.setSample(bank, `capture-${new Date().toLocaleTimeString()}`, left, right)
+      this.buildFromSource(bank)
     }
   }
 
@@ -1143,7 +1168,7 @@ export class Session {
     if (!audio) return
     const p = this.pads[pad]
     const category = this.labelOf(pad)?.category ?? 'perc'
-    const name = p.sample?.name ?? `${this.banks[bankOf(pad)].sample?.name ?? 'sample'} ${pad + 1}`
+    const name = p.sample?.name ?? `${this.banks[bankOf(pad)].sample?.name ?? 'sample'} ${(pad % BANK_PADS) + 1}`
     try {
       await navigator.storage?.persist?.()
       await saveSample({
