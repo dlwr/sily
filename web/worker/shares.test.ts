@@ -1,4 +1,4 @@
-import { unzipSync, Zip, ZipPassThrough, zipSync } from 'fflate'
+import { strToU8, unzipSync, Zip, ZipPassThrough, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { pack, type Bundle } from '../src/storage/bundle'
 import { handlePublicShare, handleShares, type ShareRecord, type ShareStore } from './shares'
@@ -39,7 +39,7 @@ const memoryStore = () => {
 const bundle = (over: Partial<Bundle> = {}): Uint8Array =>
   pack({
     project: { name: 'beat', state: { bpm: 92 } },
-    source: { name: 'break.wav', sampleRate: 8000, left: new Float32Array(80000), right: new Float32Array(80000) },
+    sources: [{ name: 'break.wav', sampleRate: 8000, left: new Float32Array(80000), right: new Float32Array(80000) }],
     samples: [],
     ...over,
   })
@@ -71,8 +71,40 @@ describe('handleShares', () => {
 
   it('rejects a source longer than fifteen seconds', async () => {
     const { store } = memoryStore()
-    const long = bundle({ source: { name: 'x', sampleRate: 8000, left: new Float32Array(128000), right: new Float32Array(128000) } })
+    const long = bundle({ sources: [{ name: 'x', sampleRate: 8000, left: new Float32Array(128000), right: new Float32Array(128000) }] })
     expect((await upload(store, long)).status).toBe(400)
+  })
+
+  it('rejects a later source longer than fifteen seconds', async () => {
+    const { store } = memoryStore()
+    const short = { name: 'x', sampleRate: 8000, left: new Float32Array(8000), right: new Float32Array(8000) }
+    const long = { name: 'y', sampleRate: 8000, left: new Float32Array(128000), right: new Float32Array(128000) }
+    expect((await upload(store, bundle({ sources: [short, null, long] }))).status).toBe(400)
+  })
+
+  it('accepts a source in each of the four banks', async () => {
+    const { store } = memoryStore()
+    const source = { name: 'x', sampleRate: 8000, left: new Float32Array(8000), right: new Float32Array(8000) }
+    expect((await upload(store, bundle({ sources: [source, source, source, source] }))).status).toBe(201)
+  })
+
+  it('rejects more sources than there are banks', async () => {
+    const { store } = memoryStore()
+    const source = { name: 'x', sampleRate: 8000, left: new Float32Array(10), right: new Float32Array(10) }
+    expect((await upload(store, bundle({ sources: [source, source, source, source, source] }))).status).toBe(400)
+  })
+
+  it('accepts a single-source bundle from an older page', async () => {
+    const { store } = memoryStore()
+    const manifest = {
+      format: 'sily',
+      version: 1,
+      project: { name: 'old', state: {} },
+      source: { name: 'old.wav', sampleRate: 8000, frames: 10 },
+      samples: [],
+    }
+    const bytes = zipSync({ 'project.json': strToU8(JSON.stringify(manifest)), 'source.f32': new Uint8Array(80) })
+    expect((await upload(store, bytes)).status).toBe(201)
   })
 
   it('rejects an upload that is too large', async () => {
@@ -97,7 +129,7 @@ describe('handleShares', () => {
   it('rejects source audio longer than its manifest says', async () => {
     const { store } = memoryStore()
     const files = unzipSync(bundle())
-    files['source.f32'] = new Uint8Array(128000 * 8)
+    files['sources/0.f32'] = new Uint8Array(128000 * 8)
     expect((await upload(store, zipSync(files))).status).toBe(400)
   })
 
@@ -118,7 +150,7 @@ describe('handleShares', () => {
 
   it('rejects a source with an implausible sample rate', async () => {
     const { store } = memoryStore()
-    const fake = bundle({ source: { name: 'x', sampleRate: 1e6, left: new Float32Array(1000), right: new Float32Array(1000) } })
+    const fake = bundle({ sources: [{ name: 'x', sampleRate: 1e6, left: new Float32Array(1000), right: new Float32Array(1000) }] })
     expect((await upload(store, fake)).status).toBe(400)
   })
 
@@ -127,7 +159,7 @@ describe('handleShares', () => {
     const files = unzipSync(bundle())
     const chunks: Uint8Array[] = []
     const zip = new Zip((_, chunk) => chunks.push(chunk))
-    for (const [name, data] of [...Object.entries(files), ['source.f32', files['source.f32']] as const]) {
+    for (const [name, data] of [...Object.entries(files), ['sources/0.f32', files['sources/0.f32']] as const]) {
       const entry = new ZipPassThrough(name)
       zip.add(entry)
       entry.push(data, true)
