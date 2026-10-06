@@ -2,7 +2,7 @@ import type { Category } from '../classify/categories'
 import { sha256Hex } from './hash'
 import type { Split } from './split'
 
-export type UploadResult = 'saved' | 'login' | 'failed'
+export type UploadResult = 'saved' | 'login' | 'refused' | 'failed'
 
 export async function uploadCorrection(wav: ArrayBuffer, label: Category, split: Split): Promise<UploadResult> {
   try {
@@ -13,7 +13,8 @@ export async function uploadCorrection(wav: ArrayBuffer, label: Category, split:
       redirect: 'manual',
     })
     if (res.ok) return 'saved'
-    if (res.type === 'opaqueredirect' || res.status === 401 || res.status === 403) return 'login'
+    if (res.type === 'opaqueredirect' || res.status === 401) return 'login'
+    if (res.status === 403) return 'refused'
     return 'failed'
   } catch {
     return 'failed'
