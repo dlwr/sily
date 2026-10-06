@@ -1,4 +1,4 @@
-import { unzipSync, zipSync } from 'fflate'
+import { unzipSync, Zip, ZipPassThrough, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { pack, type Bundle } from '../src/storage/bundle'
 import { handlePublicShare, handleShares, type ShareRecord, type ShareStore } from './shares'
@@ -120,6 +120,22 @@ describe('handleShares', () => {
     const { store } = memoryStore()
     const fake = bundle({ source: { name: 'x', sampleRate: 1e6, left: new Float32Array(1000), right: new Float32Array(1000) } })
     expect((await upload(store, fake)).status).toBe(400)
+  })
+
+  it('rejects a bundle that repeats a file name', async () => {
+    const { store } = memoryStore()
+    const files = unzipSync(bundle())
+    const chunks: Uint8Array[] = []
+    const zip = new Zip((_, chunk) => chunks.push(chunk))
+    for (const [name, data] of [...Object.entries(files), ['source.f32', files['source.f32']] as const]) {
+      const entry = new ZipPassThrough(name)
+      zip.add(entry)
+      entry.push(data, true)
+    }
+    zip.end()
+    const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+    chunks.reduce((offset, c) => (bytes.set(c, offset), offset + c.length), 0)
+    expect((await upload(store, bytes)).status).toBe(400)
   })
 
   it('rejects a bundle that would unpack too large', async () => {

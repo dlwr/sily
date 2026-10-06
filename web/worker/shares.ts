@@ -45,15 +45,18 @@ const plausible = ({ sampleRate, frames }: Audio) =>
 const readManifest = (bytes: Uint8Array): Manifest | null => {
   try {
     const sizes = new Map<string, number>()
+    let duplicated = false
+    let unpacked = 0
     const files = unzipSync(bytes, {
       filter: (f) => {
+        duplicated ||= sizes.has(f.name)
+        unpacked += f.originalSize
         sizes.set(f.name, f.originalSize)
         return f.name === 'project.json' && f.originalSize <= MAX_MANIFEST_BYTES
       },
     })
     const manifest = JSON.parse(strFromU8(files['project.json'])) as Manifest
-    if (manifest.format !== 'sily') return null
-    if ([...sizes.values()].reduce((a, b) => a + b, 0) > MAX_UNPACKED_BYTES) return null
+    if (manifest.format !== 'sily' || duplicated || unpacked > MAX_UNPACKED_BYTES) return null
     const expected = new Map<string, Audio>([['project.json', {}]])
     if (manifest.source) expected.set('source.f32', manifest.source)
     for (const sample of manifest.samples ?? []) expected.set(`samples/${sample.id}.f32`, sample)
