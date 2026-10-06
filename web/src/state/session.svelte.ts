@@ -34,7 +34,8 @@ import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, recordRepeat,
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { Bank, type Label, type Sample } from './bank.svelte'
-import { BANK_PADS, BANKS, bankForSource, bankOf, extendToBanks, inBank, mapBankEvents, PADS, readBanks, withBank, type BankState } from './banks'
+import { isSlice, sampleKey, slicesOf, type PadSample } from './padSample'
+import { BANK_PADS, BANKS, bankForSource, bankOf, extendToBanks, inBank, mapBankEvents, PADS, padName, readBanks, withBank, type BankState } from './banks'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
@@ -53,7 +54,7 @@ export type PadSettings = {
   choke: number
   chokeAuto: boolean
   fx: FxSettings
-  sample: { id: string; name: string; category: Category } | null
+  sample: PadSample | null
   pitchAuto: boolean
   fxAuto: boolean
 }
@@ -161,6 +162,7 @@ export class Session {
   private sharedBundle: Bundle | null = null
   private sharedSamples = new Map<string, { meta: SampleMeta; left: Float32Array; right: Float32Array }>()
   private midiHeld = new Map<number, number>()
+  clipboard = $state.raw<{ from: number; settings: PadSettings } | null>(null)
   private lastSaved = ''
   private replacedAudio: string[] = []
   private saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -184,7 +186,7 @@ export class Session {
   private stretchVersion = 0
   private requested = new Set<string>()
   private inflight = new Set<Promise<unknown>>()
-  private own = new Map<number, { id: string; left: Float32Array; right: Float32Array }>()
+  private own = new Map<number, { key: string; left: Float32Array; right: Float32Array }>()
   private stretched = new Map<string, { pad: number; pitch: number; left: Float32Array; right: Float32Array }>()
 
   get bank(): Bank {
@@ -217,6 +219,7 @@ export class Session {
   private bankForSource(): Bank {
     this.focusBank(bankForSource(this.banks, this.focusedBank))
     if (this.bank.sourceId) this.replacedAudio.push(this.bank.sourceId)
+    if (this.bank.sample) this.dropSlicesOf(this.bank)
     return this.bank
   }
 
@@ -225,6 +228,7 @@ export class Session {
     if (!bank.sample) return
     this.stopLabeling()
     if (bank.sourceId) this.replacedAudio.push(bank.sourceId)
+    this.dropSlicesOf(bank)
     this.clearBank(bank)
     const b = bank.index
     this.pads = withBank(this.pads, b, inBank(this.pads, b).map((p) => (p.sample ? p : freshPad())))
@@ -603,7 +607,7 @@ export class Session {
 
   private async bundle(): Promise<Bundle> {
     await this.flushSave()
-    const ids = [...new Set(this.pads.flatMap((p) => (p.sample ? [p.sample.id] : [])))]
+    const ids = [...new Set(this.pads.flatMap((p) => (p.sample && !isSlice(p.sample) ? [p.sample.id] : [])))]
     const samples = (await Promise.all(ids.map((id) => this.sharedSamples.get(id) ?? loadSample(id)))).flatMap((s) => (s ? [s] : []))
     return {
       project: { name: this.projectName, state: JSON.parse(JSON.stringify(this.projectState())) },
@@ -644,6 +648,21 @@ export class Session {
       pads[pad] = { ...pads[pad], sample: { id: meta.id, name: meta.name, category: meta.category as Category } }
       return { meta, ...audio }
     })
+    const copies = pads.flatMap((p, pad) => {
+      const audio = this.own.get(pad)
+      if (!p.sample || !isSlice(p.sample) || !audio) return []
+      const meta: SampleMeta = {
+        id: newId(),
+        name: p.sample.name,
+        category: p.sample.category,
+        sampleRate: this.sampleRate,
+        frames: audio.left.length,
+        createdAt: Date.now(),
+        settings: {},
+      }
+      pads[pad] = { ...p, sample: { id: meta.id, name: p.sample.name, category: p.sample.category } }
+      return [{ meta, left: audio.left, right: audio.right }]
+    })
     return {
       project: {
         name: bundle.project.name,
@@ -659,7 +678,7 @@ export class Session {
         const window = trim.windows[b]
         return source && window && { ...source, left: source.left.slice(...window), right: source.right.slice(...window) }
       }),
-      samples: [...bundle.samples, ...detached],
+      samples: [...bundle.samples, ...detached, ...copies],
     }
   }
 
@@ -1228,7 +1247,7 @@ export class Session {
     const settings = loaded.meta.settings as Partial<PadSettings>
     const category = loaded.meta.category as Category
     Object.assign(this.pads[pad], settings, { sample: { id, name: loaded.meta.name, category } })
-    this.own.set(pad, { id, left, right })
+    this.own.set(pad, { key: id, left, right })
     this.sily.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
     this.sendPad(pad)
     this.autoChoke()
@@ -1430,24 +1449,77 @@ export class Session {
 
   private syncOwn() {
     this.pads.forEach((p, pad) => {
+      const sample = p.sample
+      const key = sample && this.ownKey(sample)
       const current = this.own.get(pad)
-      if (current && current.id !== p.sample?.id) {
+      if (current && current.key !== key) {
         this.own.delete(pad)
         this.sily?.send({ type: 'padSample', pad, left: null, right: null })
       }
-      if (p.sample && !this.own.has(pad)) {
-        const id = p.sample.id
-        const shared = this.sharedSamples.get(id)
-        ;(shared ? Promise.resolve(shared) : loadSample(id)).then((loaded) => {
-          if (!loaded || this.pads[pad].sample?.id !== id) return
-          const left = resample(loaded.left, loaded.meta.sampleRate, this.sampleRate)
-          const right = resample(loaded.right, loaded.meta.sampleRate, this.sampleRate)
-          this.own.set(pad, { id, left, right })
-          this.sily?.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
-          this.invalidateStretched([pad])
-        })
+      if (!sample || !key || this.own.has(pad)) return
+      if (isSlice(sample)) {
+        const bank = this.banks[sample.bank]
+        if (bank?.sample) this.setOwn(pad, key, this.detachedAudio(bank, sample.range))
+        return
       }
+      const shared = this.sharedSamples.get(sample.id)
+      ;(shared ? Promise.resolve(shared) : loadSample(sample.id)).then((loaded) => {
+        const now = this.pads[pad].sample
+        if (!loaded || !now || this.ownKey(now) !== key) return
+        this.setOwn(pad, key, {
+          left: resample(loaded.left, loaded.meta.sampleRate, this.sampleRate),
+          right: resample(loaded.right, loaded.meta.sampleRate, this.sampleRate),
+        })
+      })
     })
+  }
+
+  private ownKey(sample: PadSample): string | null {
+    if (!isSlice(sample)) return sampleKey(sample, { rate: 1, stretch: null })
+    const bank = this.banks[sample.bank]
+    return bank?.sample ? sampleKey(sample, { rate: this.tapeRate(bank), stretch: bank.loadedStretch }) : null
+  }
+
+  private setOwn(pad: number, key: string, { left, right }: { left: Float32Array; right: Float32Array }) {
+    this.own.set(pad, { key, left, right })
+    this.sily?.send({ type: 'padSample', pad, left: left.slice(), right: right.slice() })
+    this.invalidateStretched([pad])
+  }
+
+  copyPad(pad = this.selectedPad) {
+    const p = this.pads[pad]
+    const bank = this.banks[bankOf(pad)]
+    const range = this.sliceRange(pad)
+    const sample: PadSample | null =
+      p.sample ??
+      (range && bank.sample
+        ? { bank: bank.index, range, name: `${bank.sample.name} ${padName(pad)}`, category: this.labelOf(pad)?.category ?? 'perc' }
+        : null)
+    if (!sample) return
+    this.clipboard = { from: pad, settings: { ...$state.snapshot(p), sample } }
+    this.message = `パッド ${padName(pad)} をコピーした`
+  }
+
+  pastePad(pad = this.selectedPad) {
+    const clip = this.clipboard
+    if (!clip || clip.from === pad) return
+    this.checkpoint()
+    this.pads[pad] = structuredClone(clip.settings)
+    this.syncOwn()
+    this.sendPad(pad)
+    this.autoChoke()
+    this.invalidateStretched([pad])
+    this.message = `パッド ${padName(clip.from)} を ${padName(pad)} に貼り付けた`
+  }
+
+  private dropSlicesOf(bank: Bank) {
+    const pads = new Set(slicesOf(this.pads, bank.index))
+    if (pads.size === 0) return
+    pads.forEach((pad) => (this.pads[pad].sample = null))
+    const kept = (e: PadEvent) => !pads.has(e.pad)
+    this.events = this.events.filter(kept)
+    this.patterns = this.patterns.map((p) => ({ ...p, events: p.events.filter(kept) }))
+    this.syncOwn()
   }
 
   generateCandidates(bank = this.bank) {
@@ -1935,6 +2007,7 @@ export class Session {
     }
     this.sily.send({ type: 'sourceRate', source: bank.index, rate: this.tapeRate(bank) })
     this.invalidateStretched(this.padsOf(bank))
+    this.syncOwn()
   }
 
   private track<T>(job: Promise<T>): Promise<T> {
