@@ -24,6 +24,10 @@ export const saveSource = async (left: Float32Array, right: Float32Array, sample
   return id
 }
 
+export const deleteSource = async (id: string) => {
+  await remove('audio', id)
+}
+
 export const saveProject = async (doc: ProjectDoc) => {
   await put<ProjectDoc>('projects', { ...doc, updatedAt: Date.now() })
 }

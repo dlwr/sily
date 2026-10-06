@@ -15,6 +15,7 @@ import { pack, unpack, withFreshSampleIds, type Bundle, type BundleSource } from
 import { deleteSample, importSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
 import {
   deleteProject,
+  deleteSource,
   listProjects,
   loadProject,
   saveProject,
@@ -161,6 +162,7 @@ export class Session {
   private sharedSamples = new Map<string, { meta: SampleMeta; left: Float32Array; right: Float32Array }>()
   private midiHeld = new Map<number, number>()
   private lastSaved = ''
+  private replacedAudio: string[] = []
   private saveTimer: ReturnType<typeof setTimeout> | undefined
   private pendingSave: string | null = null
   private beforeGenerate: PadEvent[] | null = null
@@ -195,6 +197,7 @@ export class Session {
 
   focusBank(index: number) {
     if (index === this.focusedBank || !this.banks[index]) return
+    this.adopt()
     this.stopLabeling()
     this.stopAudition()
     this.focusedBank = index
@@ -213,7 +216,28 @@ export class Session {
 
   private bankForSource(): Bank {
     this.focusBank(bankForSource(this.banks, this.focusedBank))
+    if (this.bank.sourceId) this.replacedAudio.push(this.bank.sourceId)
     return this.bank
+  }
+
+  emptyBank() {
+    const bank = this.bank
+    if (!bank.sample) return
+    this.stopLabeling()
+    if (bank.sourceId) this.replacedAudio.push(bank.sourceId)
+    this.clearBank(bank)
+    const b = bank.index
+    this.pads = withBank(this.pads, b, inBank(this.pads, b).map((p) => (p.sample ? p : freshPad())))
+    const kept = (e: PadEvent) => bankOf(e.pad) !== b || !!this.pads[e.pad]?.sample
+    this.adopt()
+    this.events = this.events.filter(kept)
+    this.patterns = this.patterns.map((p) => ({ ...p, events: p.events.filter(kept) }))
+    this.history = new History<Doc>()
+    this.autoChoke()
+    this.padsOf(bank).forEach((pad) => this.sendPad(pad))
+    this.sendMarkers(bank)
+    this.invalidateStretched(this.padsOf(bank))
+    this.syncEvents()
   }
 
   get patternBeats() {
@@ -405,7 +429,7 @@ export class Session {
 
   private scheduleSave(json: string) {
     if (!this.projectId || json === this.lastSaved) return
-    if (!this.banks.some((b) => b.sample) && !this.pads.some((p) => p.sample)) return
+    if (!this.lastSaved && !this.banks.some((b) => b.sample) && !this.pads.some((p) => p.sample)) return
     this.pendingSave = json
     clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => this.flushSave(), SAVE_DELAY_MS)
@@ -432,6 +456,7 @@ export class Session {
         state: JSON.parse(json),
       })
       this.lastSaved = json
+      for (const audio of this.replacedAudio.splice(0)) await deleteSource(audio)
       await this.refreshProjects()
     } catch {
       this.message = 'プロジェクトを保存できなかった'
@@ -724,15 +749,23 @@ export class Session {
     bank.sourceSpeed = { mode: 'tape', rate: 1 }
     bank.sourceBpm = null
     bank.heldOut = false
+    bank.splitByHash = null
+    bank.features.clear()
+    bank.embeddings.clear()
+    bank.kitPending = false
+    bank.refining = false
     bank.sourceToken++
+    bank.refineGeneration++
+    bank.phraseToken++
+    clearTimeout(bank.classifyTimer)
     this.padSlices = withBank(this.padSlices, bank.index, inBank(identity(), bank.index))
     this.padSpans = withBank(this.padSpans, bank.index, inBank(noSpans(), bank.index))
     if (bank === this.bank) this.stopAudition()
     this.sily?.send({ type: 'load', source: bank.index, left: new Float32Array(0), right: new Float32Array(0) })
   }
 
-  private leads(bank: Bank) {
-    return this.banks.find((b) => b.sample) === bank
+  private isOnlySource(bank: Bank) {
+    return this.banks.every((b) => b === bank || !b.sample)
   }
 
   async loadFile(file: File) {
@@ -755,13 +788,13 @@ export class Session {
     const b = bank.index
     bank.sample = { name, left, right, mono: mixdown(left, right) }
     bank.sourceId = null
-    if (this.keyAuto && this.leads(bank)) this.key = estimateKey(this.sily.chroma(bank.sample.mono))
+    if (this.keyAuto && this.isOnlySource(bank)) this.key = estimateKey(this.sily.chroma(bank.sample.mono))
     bank.sourceSpeed = { mode: 'tape', rate: 1 }
     bank.sourceBpm = null
     bank.heldOut = false
     bank.splitByHash = null
     bank.kitPending = false
-    if (this.leads(bank)) this.playWhenBuilt = false
+    if (this.isOnlySource(bank)) this.playWhenBuilt = false
     this.loadEngineSample(bank, left, right, null)
     this.sily.send({ type: 'sourceRate', source: b, rate: 1 })
     this.adopt()
@@ -1601,11 +1634,11 @@ export class Session {
   }
 
   private buildFromSource(bank: Bank) {
-    if (this.leads(bank)) this.detectBpm(bank)
+    if (this.isOnlySource(bank)) this.detectBpm(bank)
     else this.estimateSourceBpm(bank)
     this.sliceByOnsets(bank)
     bank.kitPending = true
-    if (this.leads(bank)) this.playWhenBuilt = true
+    if (this.isOnlySource(bank)) this.playWhenBuilt = true
   }
 
   scaleSourceBpm(factor: number) {
@@ -1613,7 +1646,7 @@ export class Session {
     if (!bank.sample || !bank.sourceBpm) return
     this.checkpoint()
     bank.sourceBpm = Math.round(bank.sourceBpm * factor * 10) / 10
-    if (this.leads(bank)) {
+    if (this.isOnlySource(bank)) {
       this.bpm = Math.round(bank.sourceBpm * bank.sourceSpeed.rate * 10) / 10
       this.syncTransport()
       this.playWhenBuilt = true
@@ -1623,7 +1656,7 @@ export class Session {
   }
 
   private finishBuild(bank: Bank) {
-    if (!this.playWhenBuilt || !this.leads(bank)) return
+    if (!this.playWhenBuilt || !this.isOnlySource(bank)) return
     this.playWhenBuilt = false
     this.generateCandidates(bank)
     if (!this.playing && this.candidates.length > 0) this.togglePlaying()
