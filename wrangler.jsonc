@@ -4,7 +4,8 @@
   "main": "./web/worker/index.ts",
   "assets": {
     "directory": "./web/dist",
-    "run_worker_first": ["/api/*"]
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/s/*"]
   },
   "d1_databases": [
     {
