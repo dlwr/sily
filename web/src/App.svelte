@@ -66,6 +66,15 @@
       else session.undo()
       return
     }
+    if ((e.metaKey || e.ctrlKey) && e.code === 'KeyC' && !window.getSelection()?.toString()) {
+      session.copyPad()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.code === 'KeyV') {
+      e.preventDefault()
+      session.pastePad()
+      return
+    }
     if (e.metaKey || e.ctrlKey) return
     if (session.labelingSlice !== null) {
       onLabelingKey(e, session.labelingSlice)

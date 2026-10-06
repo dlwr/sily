@@ -15,6 +15,16 @@
 
 <section>
   <h2>パッド {padName(session.selectedPad)}</h2>
+  <div class="copy">
+    <button onclick={() => session.copyPad()} disabled={!session.hasSound(session.selectedPad)} title="⌘C">コピー</button>
+    <button
+      onclick={() => session.pastePad()}
+      disabled={!session.clipboard || session.clipboard.from === session.selectedPad}
+      title="⌘V。別のバンクにも貼り付けられる"
+    >
+      {session.clipboard ? `${padName(session.clipboard.from)} を貼り付け` : '貼り付け'}
+    </button>
+  </div>
   <label>
     種類
     <select
@@ -130,6 +140,11 @@
   h2 {
     margin: 0;
     font-size: 15px;
+  }
+
+  .copy {
+    display: flex;
+    gap: 6px;
   }
 
   label {
