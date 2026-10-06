@@ -19,6 +19,9 @@
     <button class="rec" aria-pressed={session.recording} onclick={() => session.toggleRecording()}>
       Rec <kbd>Enter</kbd>
     </button>
+    <button aria-pressed={session.noteRepeat} onclick={() => session.toggleNoteRepeat()} title="押している間、グリッドごとに連打する">
+      連打 <kbd>N</kbd>
+    </button>
     <span class="num position">{position}</span>
     {#if session.midiInputs.length}<span class="muted" title={session.midiInputs.join('\n')}>MIDI</span>{/if}
   </div>

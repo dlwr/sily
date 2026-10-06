@@ -110,7 +110,7 @@
   {#if session.correctionLogin}
     <a href="/api/corrections/login" target="_blank" rel="noopener">直したラベルを送るにはログイン</a>
   {/if}
-  <button aria-pressed={session.keyboardMode} onclick={() => (session.keyboardMode = !session.keyboardMode)}>
+  <button aria-pressed={session.keyboardMode} onclick={() => session.toggleKeyboardMode()}>
     鍵盤モード <kbd>Tab</kbd>
   </button>
   {#if session.keyboardMode}

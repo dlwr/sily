@@ -23,6 +23,16 @@ impl Default for Groove {
     }
 }
 
+pub fn grooved(beat: f64, g: Groove) -> f64 {
+    let k = (beat / g.grid).round();
+    let target = if k as i64 % 2 != 0 {
+        (k - 1.0) * g.grid + 2.0 * g.grid * g.swing
+    } else {
+        k * g.grid
+    };
+    beat + (target - beat) * g.strength
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pattern {
     length_beats: f64,
@@ -81,15 +91,7 @@ impl Pattern {
     }
 
     pub fn placed_beat(&self, event: &Event) -> f64 {
-        let g = self.groove;
-        let k = (event.beat / g.grid).round();
-        let target = if k as i64 % 2 != 0 {
-            (k - 1.0) * g.grid + 2.0 * g.grid * g.swing
-        } else {
-            k * g.grid
-        };
-        let placed = event.beat + (target - event.beat) * g.strength + event.nudge;
-        placed.rem_euclid(self.length_beats)
+        (grooved(event.beat, self.groove) + event.nudge).rem_euclid(self.length_beats)
     }
 
     pub fn for_each_in_span(&self, start_beat: f64, span_beats: f64, mut f: impl FnMut(f64, &Event)) {

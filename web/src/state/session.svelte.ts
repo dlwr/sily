@@ -29,7 +29,7 @@ import { encodeWav24, soundingLength } from '../export/wav'
 import { uploadCorrection } from '../corrections/upload'
 import { sha256Hex } from '../corrections/hash'
 import { chooseSplit, splitFor, type Split } from '../corrections/split'
-import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
+import { changeVelocity, nudgeEvent, padsPlayedBetween, recordHit, recordRepeat, removeEvent, shiftPitch, toggleStep, type PadEvent } from './pattern'
 import { rateForBpm, rateToSemitones, SourceMap, type SourceSpeed } from './source'
 import { History } from './history'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
@@ -38,7 +38,7 @@ import { frameAt } from './timing'
 import { uploadShare } from '../share/api'
 import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../share/limits'
 import { trimSource } from '../share/trim'
-import { noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
+import { noteOff, noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
 
 export type PadSettings = {
   pitch: number
@@ -129,6 +129,7 @@ export class Session {
   strength = $state(0)
   swing = $state(0.5)
   keyboardMode = $state(false)
+  noteRepeat = $state(false)
   midiInputs = $state<string[]>([])
   beat = $state(0)
   auditionFrame = $state<number | null>(null)
@@ -172,6 +173,7 @@ export class Session {
   private sharedBundle: Bundle | null = null
   private sharedSamples = new Map<string, { meta: SampleMeta; left: Float32Array; right: Float32Array }>()
   private sourceId: string | null = null
+  private midiHeld = new Map<number, number>()
   private lastSaved = ''
   private saveTimer: ReturnType<typeof setTimeout> | undefined
   private pendingSave: string | null = null
@@ -334,6 +336,16 @@ export class Session {
       this.checkpoint('record')
       this.adopt()
       this.events = recordHit(this.events, r.pad, r.beat, r.velocity, r.pitch)
+      this.syncEvents()
+    }
+    sily.onRepeated = (r) => {
+      this.hits[r.pad] = performance.now()
+      if (!this.recording || this.songMode) return
+      const events = recordRepeat(this.events, r.pad, r.beat, r.velocity, r.pitch, this.grid / 2)
+      if (events === this.events) return
+      this.checkpoint('record')
+      this.adopt()
+      this.events = events
       this.syncEvents()
     }
     sily.onFailure = () => (this.message = 'オーディオ処理が停止した。ページを再読み込みしてほしい')
@@ -1624,6 +1636,9 @@ export class Session {
     this.selectedPad = pad
     this.hits[pad] = performance.now()
     this.sily.send({ type: 'trigger', pad, velocity, pitch: 0 })
+    if (this.noteRepeat && this.playing) {
+      this.sily.send({ type: 'hold', pad, velocity, pitch: 0, time: this.sily.audibleTime(timeStamp) })
+    }
     if (this.recording && this.playing) {
       this.sily.send({ type: 'record', pad, velocity, pitch: 0, time: this.sily.audibleTime(timeStamp) })
     }
@@ -1639,11 +1654,39 @@ export class Session {
     }
   }
 
+  padUp(pad: number) {
+    this.sily?.send({ type: 'release', pad })
+  }
+
+  releasePads() {
+    this.midiHeld.clear()
+    this.sily?.send({ type: 'release', pad: null })
+  }
+
+  toggleNoteRepeat() {
+    this.noteRepeat = !this.noteRepeat
+    if (!this.noteRepeat) this.releasePads()
+  }
+
+  toggleKeyboardMode() {
+    this.keyboardMode = !this.keyboardMode
+    this.releasePads()
+  }
+
   midiNoteDown(note: number, velocity: number, timeStamp: number) {
     if (this.labelingSlice !== null) return
     if (this.keyboardMode) return this.noteDown(semitonesForMidiNote(note), timeStamp, velocity)
     const pad = padForMidiNote(note)
-    if (pad !== undefined) this.padDown(pad, timeStamp, velocity)
+    if (pad === undefined) return
+    this.midiHeld.set(note, pad)
+    this.padDown(pad, timeStamp, velocity)
+  }
+
+  midiNoteUp(note: number) {
+    const pad = this.midiHeld.get(note)
+    if (pad === undefined) return
+    this.midiHeld.delete(note)
+    this.padUp(pad)
   }
 
   private async connectMidi() {
@@ -1658,8 +1701,11 @@ export class Session {
       const names: string[] = []
       access.inputs.forEach((input) => {
         input.onmidimessage = (e) => {
-          const hit = e.data && noteOn(e.data)
-          if (hit) this.midiNoteDown(hit.note, hit.velocity, e.timeStamp)
+          if (!e.data) return
+          const hit = noteOn(e.data)
+          if (hit) return this.midiNoteDown(hit.note, hit.velocity, e.timeStamp)
+          const released = noteOff(e.data)
+          if (released !== null) this.midiNoteUp(released)
         }
         if (input.state === 'connected') names.push(input.name ?? 'MIDI')
       })

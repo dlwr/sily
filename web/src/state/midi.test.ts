@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
+import { noteOff, noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
 
 describe('noteOn', () => {
   it('reads the note and velocity of a note-on on any channel', () => {
@@ -24,6 +24,24 @@ describe('noteOn', () => {
 
   it('ignores truncated messages', () => {
     expect(noteOn(new Uint8Array([0x90, 60]))).toBeNull()
+  })
+})
+
+describe('noteOff', () => {
+  it('reads the note of a note-off on any channel', () => {
+    expect(noteOff(new Uint8Array([0x89, 36, 64]))).toBe(36)
+  })
+
+  it('reads a note-on with zero velocity as a note-off', () => {
+    expect(noteOff(new Uint8Array([0x90, 60, 0]))).toBe(60)
+  })
+
+  it('ignores a sounding note-on', () => {
+    expect(noteOff(new Uint8Array([0x90, 60, 1]))).toBeNull()
+  })
+
+  it('ignores truncated messages', () => {
+    expect(noteOff(new Uint8Array([0x80, 60]))).toBeNull()
   })
 })
 

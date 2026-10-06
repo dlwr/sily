@@ -75,6 +75,13 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'note':
         w.engine_trigger_note(msg.slice, msg.semitones, msg.velocity)
         break
+      case 'hold':
+        w.engine_hold(msg.pad, msg.velocity, msg.pitch, msg.time)
+        break
+      case 'release':
+        if (msg.pad === null) w.engine_release_all()
+        else w.engine_release(msg.pad)
+        break
       case 'audition':
         w.engine_audition(msg.from ?? -1)
         break
@@ -122,6 +129,15 @@ class SilyProcessor extends AudioWorkletProcessor {
     const frames = out[0].length
     const w = this.wasm
     w.engine_process(frames, currentTime)
+    for (let i = 0, n = w.engine_repeat_count(); i < n; i++) {
+      this.post({
+        type: 'repeated',
+        pad: w.engine_repeat_pad(i),
+        velocity: w.engine_repeat_velocity(i),
+        pitch: w.engine_repeat_pitch(i),
+        beat: w.engine_repeat_beat(i),
+      })
+    }
     for (let ch = 0; ch < out.length; ch++) {
       out[ch].set(new Float32Array(w.memory.buffer, w.engine_output(Math.min(ch, 1)), frames))
     }

@@ -11,6 +11,14 @@ export type SilyExports = {
   engine_set_source_rate(rate: number): void
   engine_trigger(pad: number, velocity: number, pitch: number): void
   engine_trigger_note(slice: number, semitones: number, velocity: number): void
+  engine_hold(pad: number, velocity: number, pitch: number, time: number): void
+  engine_release(pad: number): void
+  engine_release_all(): void
+  engine_repeat_count(): number
+  engine_repeat_pad(i: number): number
+  engine_repeat_velocity(i: number): number
+  engine_repeat_pitch(i: number): number
+  engine_repeat_beat(i: number): number
   engine_audition(fromFrame: number): void
   engine_audition_frame(): number
   engine_set_bpm(bpm: number): void

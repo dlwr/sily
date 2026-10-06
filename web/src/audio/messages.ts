@@ -13,6 +13,8 @@ export type ToWorklet =
   | { type: 'sourceRate'; rate: number }
   | { type: 'trigger'; pad: number; velocity: number; pitch: number }
   | { type: 'note'; slice: number; semitones: number; velocity: number }
+  | { type: 'hold'; pad: number; velocity: number; pitch: number; time: number }
+  | { type: 'release'; pad: number | null }
   | { type: 'audition'; from: number | null }
   | { type: 'transport'; bpm: number; playing: boolean; metronome: boolean; lengthBeats: number }
   | { type: 'playLimit'; beats: number | null }
@@ -24,3 +26,4 @@ export type ToWorklet =
 export type FromWorklet =
   | { type: 'tick'; beat: number; auditionFrame: number | null; time: number }
   | { type: 'recorded'; pad: number; velocity: number; pitch: number; beat: number }
+  | { type: 'repeated'; pad: number; velocity: number; pitch: number; beat: number }

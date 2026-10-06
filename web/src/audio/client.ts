@@ -12,6 +12,7 @@ export type Capture = { stop(): { left: Float32Array; right: Float32Array } }
 export class Sily {
   onTick: (msg: Extract<FromWorklet, { type: 'tick' }>) => void = () => {}
   onRecorded: (msg: Extract<FromWorklet, { type: 'recorded' }>) => void = () => {}
+  onRepeated: (msg: Extract<FromWorklet, { type: 'repeated' }>) => void = () => {}
   onFailure: () => void = () => {}
   private dsp = new WorkerRpc<DspJob, Stereo>(
     () => new Worker(new URL('./dsp.worker.ts', import.meta.url), { type: 'module' }),
@@ -27,7 +28,8 @@ export class Sily {
     node.onprocessorerror = () => this.onFailure()
     node.port.onmessage = (e: MessageEvent<FromWorklet>) => {
       if (e.data.type === 'tick') this.onTick(e.data)
-      else this.onRecorded(e.data)
+      else if (e.data.type === 'recorded') this.onRecorded(e.data)
+      else this.onRepeated(e.data)
     }
   }
 
