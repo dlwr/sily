@@ -8,6 +8,16 @@ export const PADS = BANKS * BANK_PADS
 
 export const bankOf = (pad: number) => Math.floor(pad / BANK_PADS)
 
+export const BANK_NAMES = ['A', 'B', 'C', 'D']
+
+export const padName = (pad: number) => `${BANK_NAMES[bankOf(pad)]}${(pad % BANK_PADS) + 1}`
+
+export const bankForSource = (banks: { sample: unknown }[], focused: number): number => {
+  if (!banks[focused].sample) return focused
+  const empty = banks.findIndex((b) => !b.sample)
+  return empty < 0 ? focused : empty
+}
+
 export const inBank = <T>(xs: T[], bank: number): T[] => xs.slice(bank * BANK_PADS, (bank + 1) * BANK_PADS)
 
 export const withBank = <T>(xs: T[], bank: number, local: T[]): T[] => [
