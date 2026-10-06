@@ -101,3 +101,27 @@ export const autoFx = (category: Category): FxSettings | null => {
   const name = AUTO_PRESET[category]
   return presetsFor(category).find((p) => p.name === name)?.settings ?? null
 }
+
+export type Mix = { comp: number; sends: { reverb: number; delay: number } }
+
+const AUTO_MIX: Record<Category, Mix> = {
+  kick: { comp: 0.3, sends: { reverb: 0, delay: 0 } },
+  snare: { comp: 0.3, sends: { reverb: 0.12, delay: 0 } },
+  clap: { comp: 0.25, sends: { reverb: 0.15, delay: 0 } },
+  rim: { comp: 0.2, sends: { reverb: 0.08, delay: 0 } },
+  closed_hat: { comp: 0, sends: { reverb: 0.04, delay: 0 } },
+  open_hat: { comp: 0, sends: { reverb: 0.06, delay: 0 } },
+  tom: { comp: 0.2, sends: { reverb: 0.1, delay: 0 } },
+  cymbal: { comp: 0, sends: { reverb: 0.08, delay: 0 } },
+  perc: { comp: 0.2, sends: { reverb: 0.08, delay: 0 } },
+  bass: { comp: 0.4, sends: { reverb: 0, delay: 0 } },
+  keys: { comp: 0.15, sends: { reverb: 0.15, delay: 0.08 } },
+  vocal: { comp: 0.3, sends: { reverb: 0.15, delay: 0.1 } },
+  melody: { comp: 0.15, sends: { reverb: 0.15, delay: 0.08 } },
+  fx: { comp: 0, sends: { reverb: 0.2, delay: 0.1 } },
+  upper: { comp: 0.15, sends: { reverb: 0.15, delay: 0.08 } },
+}
+
+export const NO_MIX: Mix = { comp: 0, sends: { reverb: 0, delay: 0 } }
+
+export const autoMix = (category: Category): Mix => AUTO_MIX[category]
