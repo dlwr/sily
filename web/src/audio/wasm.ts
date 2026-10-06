@@ -11,6 +11,8 @@ export type SilyExports = {
   engine_set_source_rate(source: number, rate: number): void
   engine_set_pad_mix(pad: number, pan: number, reverbSend: number, delaySend: number): void
   engine_set_reverb(size: number, damping: number, level: number): void
+  engine_set_pad_comp(pad: number, amount: number): void
+  engine_set_glue(amount: number): void
   engine_set_delay(feedback: number, toneHz: number, pingPong: number, beats: number, level: number): void
   engine_trigger(pad: number, velocity: number, pitch: number): void
   engine_trigger_note(slice: number, semitones: number, velocity: number): void

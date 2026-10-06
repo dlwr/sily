@@ -72,6 +72,10 @@ class SilyProcessor extends AudioWorkletProcessor {
       case 'padMix':
         w.engine_set_pad_mix(msg.pad, msg.pan, msg.reverb, msg.delay)
         break
+      case 'comp':
+        if (msg.pad === null) w.engine_set_glue(msg.amount)
+        else w.engine_set_pad_comp(msg.pad, msg.amount)
+        break
       case 'reverb':
         w.engine_set_reverb(msg.size, msg.damping, msg.level)
         break
