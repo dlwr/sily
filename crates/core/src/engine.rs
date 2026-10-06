@@ -1,4 +1,5 @@
 use crate::fx::{FxChain, FxSettings};
+use crate::sends::{Delay, DelaySettings, Reverb, ReverbSettings};
 use crate::sequencer::{grooved, Event, Groove, Pattern};
 use crate::slicing::slices;
 
@@ -8,6 +9,7 @@ pub const PADS: usize = BANK_PADS * SOURCES;
 const VOICES: usize = 64;
 const MAX_EVENTS: usize = 16384;
 const MAX_REPEATS: usize = 256;
+const MAX_DELAY_SECONDS: f32 = 4.0;
 
 #[derive(Debug, Clone, Default)]
 struct Pad {
@@ -17,6 +19,9 @@ struct Pad {
     choke: Option<u8>,
     own: Option<[Vec<f32>; 2]>,
     stretched: Vec<(i64, [Vec<f32>; 2])>,
+    pan: f32,
+    reverb_send: f32,
+    delay_send: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,6 +108,12 @@ pub struct Engine {
     buses: Vec<[Vec<f32>; 2]>,
     pad_fx: Vec<FxChain>,
     master_fx: FxChain,
+    sends: [[Vec<f32>; 2]; 2],
+    reverb: Reverb,
+    reverb_level: f32,
+    delay: Delay,
+    delay_level: f32,
+    delay_beats: f64,
     pending: Vec<(usize, Event)>,
     held: [Option<Held>; PADS],
     repeats: Vec<Repeat>,
@@ -139,6 +150,12 @@ impl Engine {
             buses: (0..PADS).map(|_| [vec![0.0; max_block], vec![0.0; max_block]]).collect(),
             pad_fx: (0..PADS).map(|_| FxChain::new(sample_rate as f32)).collect(),
             master_fx: FxChain::new(sample_rate as f32),
+            sends: std::array::from_fn(|_| [vec![0.0; max_block], vec![0.0; max_block]]),
+            reverb: Reverb::new(sample_rate as f32),
+            reverb_level: 0.0,
+            delay: Delay::new(sample_rate as f32, MAX_DELAY_SECONDS),
+            delay_level: 0.0,
+            delay_beats: 0.75,
             pending: Vec::with_capacity(MAX_EVENTS),
             held: [None; PADS],
             repeats: Vec::with_capacity(MAX_REPEATS),
@@ -487,14 +504,56 @@ impl Engine {
         self.master_fx.set(settings);
     }
 
+    pub fn set_pad_mix(&mut self, pad: usize, pan: f32, reverb_send: f32, delay_send: f32) {
+        if let Some(p) = self.pads.get_mut(pad) {
+            p.pan = pan.clamp(-1.0, 1.0);
+            p.reverb_send = reverb_send.max(0.0);
+            p.delay_send = delay_send.max(0.0);
+        }
+    }
+
+    pub fn set_reverb(&mut self, settings: ReverbSettings, level: f32) {
+        self.reverb.set(settings);
+        self.reverb_level = level.max(0.0);
+    }
+
+    pub fn set_delay(&mut self, settings: DelaySettings, beats: f64, level: f32) {
+        self.delay.set(settings);
+        self.delay_beats = beats.max(0.0);
+        self.delay_level = level.max(0.0);
+    }
+
     fn mix_buses(&mut self, frames: usize) {
-        for (bus, fx) in self.buses.iter_mut().zip(&mut self.pad_fx) {
+        for send in &mut self.sends {
+            send[0][..frames].fill(0.0);
+            send[1][..frames].fill(0.0);
+        }
+        for ((bus, fx), pad) in self.buses.iter_mut().zip(&mut self.pad_fx).zip(&self.pads) {
             let [l, r] = bus;
             fx.process(&mut l[..frames], &mut r[..frames]);
+            let gains = [(1.0 - pad.pan).min(1.0), (1.0 + pad.pan).min(1.0)];
+            let amounts = [pad.reverb_send, pad.delay_send];
             for i in 0..frames {
-                self.out[0][i] += l[i];
-                self.out[1][i] += r[i];
+                let x = [l[i] * gains[0], r[i] * gains[1]];
+                for ch in 0..2 {
+                    self.out[ch][i] += x[ch];
+                    for (send, amount) in self.sends.iter_mut().zip(amounts) {
+                        if amount > 0.0 {
+                            send[ch][i] += x[ch] * amount;
+                        }
+                    }
+                }
             }
+        }
+        let [[reverb_l, reverb_r], [delay_l, delay_r]] = &mut self.sends;
+        if self.reverb_level > 0.0 {
+            self.reverb.process(&mut reverb_l[..frames], &mut reverb_r[..frames]);
+            add_return(&mut self.out, [&reverb_l[..frames], &reverb_r[..frames]], self.reverb_level);
+        }
+        if self.delay_level > 0.0 {
+            let seconds = (self.delay_beats * 60.0 / self.bpm) as f32;
+            self.delay.process(&mut delay_l[..frames], &mut delay_r[..frames], seconds);
+            add_return(&mut self.out, [&delay_l[..frames], &delay_r[..frames]], self.delay_level);
         }
         let [l, r] = &mut self.out;
         self.master_fx.process(&mut l[..frames], &mut r[..frames]);
@@ -647,6 +706,14 @@ impl Engine {
 
     pub fn output(&self, channel: usize) -> &[f32] {
         &self.out[channel]
+    }
+}
+
+fn add_return(out: &mut [Vec<f32>; 2], wet: [&[f32]; 2], level: f32) {
+    for (o, w) in out.iter_mut().zip(wet) {
+        for (o, w) in o.iter_mut().zip(w) {
+            *o += w * level;
+        }
     }
 }
 
@@ -1123,6 +1190,73 @@ mod tests {
         e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - src[20]).abs() < 1e-4);
+    }
+
+    fn render_right(e: &mut Engine, frames: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        let mut time = 0.0;
+        let mut left = frames;
+        while left > 0 {
+            let n = left.min(128);
+            e.process(n, time);
+            out.extend_from_slice(&e.output(1)[..n]);
+            time += n as f64 / SR;
+            left -= n;
+        }
+        out
+    }
+
+    #[test]
+    fn panning_left_silences_the_right_side() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_pad_mix(0, -1.0, 0.0, 0.0);
+        e.trigger(0, 1.0, 0.0);
+        assert!(render_right(&mut e, 50)[20].abs() < 1e-6);
+    }
+
+    #[test]
+    fn panning_left_keeps_the_left_side() {
+        let mut e = engine_with(vec![0.5; 1000]);
+        e.set_pad_mix(0, -1.0, 0.0, 0.0);
+        e.trigger(0, 1.0, 0.0);
+        assert!((render(&mut e, 50)[20] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_pad_sent_to_the_reverb_rings_after_its_slice_ends() {
+        let mut e = Engine::new(44_100.0, 4096);
+        e.load_source(0, vec![0.5; 441], vec![0.5; 441]);
+        e.set_reverb(ReverbSettings { size: 0.8, damping: 0.3 }, 1.0);
+        e.set_pad_mix(0, 0.0, 1.0, 0.0);
+        e.trigger(0, 1.0, 0.0);
+        let mut tail = 0.0f32;
+        for i in 0..100 {
+            e.process(128, i as f64 * 128.0 / 44_100.0);
+            if i > 50 {
+                tail = tail.max(e.output(0)[..128].iter().fold(0.0, |m, v| m.max(v.abs())));
+            }
+        }
+        assert!(tail > 1e-4, "{}", tail);
+    }
+
+    #[test]
+    fn a_pad_not_sent_anywhere_stops_with_its_slice() {
+        let mut e = engine_with(vec![0.5; 100]);
+        e.set_reverb(ReverbSettings { size: 0.8, damping: 0.3 }, 1.0);
+        e.set_delay(DelaySettings { feedback: 0.5, tone_hz: 0.0, ping_pong: false }, 1.0, 1.0);
+        e.trigger(0, 1.0, 0.0);
+        assert_eq!(first_sound(&render(&mut e, 2000)[200..]), None);
+    }
+
+    #[test]
+    fn a_pad_sent_to_the_delay_echoes_a_beat_later() {
+        let mut e = engine_with(vec![0.5; 100]);
+        e.set_bpm(60.0);
+        e.set_delay(DelaySettings { feedback: 0.0, tone_hz: 0.0, ping_pong: false }, 1.0, 1.0);
+        e.set_pad_mix(0, 0.0, 0.0, 1.0);
+        e.trigger(0, 1.0, 0.0);
+        let out = render(&mut e, 1500);
+        assert_eq!(first_sound(&out[200..]).map(|i| i + 200), Some(1000));
     }
 
     fn constant(value: f32, frames: usize) -> Vec<f32> {
