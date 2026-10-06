@@ -3,19 +3,21 @@ import type { SampleMeta } from './library'
 
 export type Audio = { left: Float32Array; right: Float32Array }
 
+export type BundleSource = { name: string; sampleRate: number } & Audio
+
 export type Bundle = {
   project: { name: string; state: Record<string, unknown> }
-  source: ({ name: string; sampleRate: number } & Audio) | null
+  sources: (BundleSource | null)[]
   samples: ({ meta: SampleMeta } & Audio)[]
 }
 
+type SourceMeta = { name: string; sampleRate: number; frames: number }
+
 type Manifest = {
   format: 'sily'
-  version: 1
   project: Bundle['project']
-  source: { name: string; sampleRate: number; frames: number } | null
   samples: SampleMeta[]
-}
+} & ({ version: 1; source: SourceMeta | null } | { version: 2; sources: (SourceMeta | null)[] })
 
 const MANIFEST = 'project.json'
 
@@ -34,13 +36,15 @@ const decode = (bytes: Uint8Array, frames: number): Audio => {
 export const pack = (bundle: Bundle): Uint8Array => {
   const manifest: Manifest = {
     format: 'sily',
-    version: 1,
+    version: 2,
     project: bundle.project,
-    source: bundle.source && { name: bundle.source.name, sampleRate: bundle.source.sampleRate, frames: bundle.source.left.length },
+    sources: bundle.sources.map((s) => s && { name: s.name, sampleRate: s.sampleRate, frames: s.left.length }),
     samples: bundle.samples.map((s) => s.meta),
   }
   const files: Record<string, Uint8Array> = { [MANIFEST]: strToU8(JSON.stringify(manifest)) }
-  if (bundle.source) files['source.f32'] = encode(bundle.source)
+  bundle.sources.forEach((s, i) => {
+    if (s) files[`sources/${i}.f32`] = encode(s)
+  })
   for (const s of bundle.samples) files[`samples/${s.meta.id}.f32`] = encode(s)
   return zipSync(files, { level: 6 })
 }
@@ -49,13 +53,16 @@ export const unpack = (bytes: Uint8Array): Bundle => {
   const files = unzipSync(bytes)
   const manifest = JSON.parse(strFromU8(files[MANIFEST] ?? new Uint8Array())) as Manifest
   if (manifest.format !== 'sily') throw new Error('not a sily project')
+  const source = (meta: SourceMeta | null, file: string): BundleSource | null =>
+    meta && { name: meta.name, sampleRate: meta.sampleRate, ...decode(files[file], meta.frames) }
   return {
     project: manifest.project,
-    source: manifest.source && {
-      name: manifest.source.name,
-      sampleRate: manifest.source.sampleRate,
-      ...decode(files['source.f32'], manifest.source.frames),
-    },
+    sources:
+      manifest.version === 1
+        ? manifest.source
+          ? [source(manifest.source, 'source.f32')]
+          : []
+        : manifest.sources.map((meta, i) => source(meta, `sources/${i}.f32`)),
     samples: manifest.samples.map((meta) => ({ meta, ...decode(files[`samples/${meta.id}.f32`], meta.frames) })),
   }
 }

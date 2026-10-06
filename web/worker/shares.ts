@@ -1,5 +1,5 @@
 import { strFromU8, unzipSync } from 'fflate'
-import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../src/share/limits.ts'
+import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS, MAX_SOURCES } from '../src/share/limits.ts'
 
 export type ShareRecord = { id: string; name: string; bpm: number | null; createdAt: string }
 export type Limits = { since: string; perDay: number; total: number }
@@ -25,6 +25,7 @@ type Manifest = {
   format?: string
   project?: { name?: unknown; state?: { bpm?: unknown } }
   source?: Audio | null
+  sources?: (Audio | null)[]
   samples?: (Audio & { id?: unknown })[]
 }
 
@@ -42,7 +43,13 @@ const plausible = ({ sampleRate, frames }: Audio) =>
   Number.isInteger(frames) &&
   (frames as number) >= 0
 
-const readManifest = (bytes: Uint8Array): Manifest | null => {
+const sourceFiles = (manifest: Manifest): [string, Audio][] | null => {
+  if (manifest.sources === undefined) return manifest.source ? [['source.f32', manifest.source]] : []
+  if (!Array.isArray(manifest.sources) || manifest.sources.length > MAX_SOURCES) return null
+  return manifest.sources.flatMap((s, i): [string, Audio][] => (s ? [[`sources/${i}.f32`, s]] : []))
+}
+
+const readManifest = (bytes: Uint8Array): { manifest: Manifest; sources: Audio[] } | null => {
   try {
     const sizes = new Map<string, number>()
     let duplicated = false
@@ -57,8 +64,9 @@ const readManifest = (bytes: Uint8Array): Manifest | null => {
     })
     const manifest = JSON.parse(strFromU8(files['project.json'])) as Manifest
     if (manifest.format !== 'sily' || duplicated || unpacked > MAX_UNPACKED_BYTES) return null
-    const expected = new Map<string, Audio>([['project.json', {}]])
-    if (manifest.source) expected.set('source.f32', manifest.source)
+    const sources = sourceFiles(manifest)
+    if (!sources) return null
+    const expected = new Map<string, Audio>([['project.json', {}], ...sources])
     for (const sample of manifest.samples ?? []) expected.set(`samples/${sample.id}.f32`, sample)
     if (sizes.size !== expected.size) return null
     for (const [name, audio] of expected) {
@@ -66,7 +74,7 @@ const readManifest = (bytes: Uint8Array): Manifest | null => {
       if (name === 'project.json') continue
       if (!plausible(audio) || sizes.get(name) !== (audio.frames as number) * BYTES_PER_FRAME) return null
     }
-    return manifest
+    return { manifest, sources: sources.map(([, audio]) => audio) }
   } catch {
     return null
   }
@@ -112,10 +120,10 @@ export async function handleShares(
     if (Number(request.headers.get('content-length') ?? 0) > MAX_SHARE_BYTES) return new Response(null, { status: 413 })
     const body = await readCapped(request, MAX_SHARE_BYTES)
     if (!body) return new Response(null, { status: 413 })
-    const manifest = readManifest(body)
-    if (!manifest) return new Response(null, { status: 400 })
-    const source = manifest.source
-    if (source && (source.frames as number) > MAX_SOURCE_SECONDS * (source.sampleRate as number)) return new Response(null, { status: 400 })
+    const read = readManifest(body)
+    if (!read) return new Response(null, { status: 400 })
+    const { manifest, sources } = read
+    if (sources.some((s) => (s.frames as number) > MAX_SOURCE_SECONDS * (s.sampleRate as number))) return new Response(null, { status: 400 })
     const name = typeof manifest.project?.name === 'string' ? manifest.project.name.slice(0, 100) : '無題'
     const bpm = typeof manifest.project?.state?.bpm === 'number' ? manifest.project.state.bpm : null
     const record = { id: newId(), name, bpm, createdAt: now.toISOString() }
