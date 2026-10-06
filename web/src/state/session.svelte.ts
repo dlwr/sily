@@ -39,7 +39,7 @@ import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
 import { uploadShare } from '../share/api'
 import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../share/limits'
-import { trimSource } from '../share/trim'
+import { trimBanks } from '../share/trim'
 import { noteOff, noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
 
 export type { Label, Sample }
@@ -595,47 +595,45 @@ export class Session {
   private async shareBundle(): Promise<Bundle> {
     const bundle = await this.bundle()
     const st = bundle.project.state as ReturnType<Session['projectState']>
-    const padSlices = [...st.padSlices]
-    const padSpans = [...st.padSpans]
+    const trim = trimBanks({
+      bankPads: BANK_PADS,
+      sources: bundle.sources.map((s) => s && { frames: s.left.length, maxFrames: Math.floor(MAX_SOURCE_SECONDS * s.sampleRate) }),
+      banks: st.banks,
+      padSlices: st.padSlices,
+      padSpans: st.padSpans,
+      ownPads: st.pads.map((p) => !!p.sample),
+    })
     const pads = [...st.pads]
-    const detached: Bundle['samples'] = []
-    const banks = st.banks.map((saved, b) => {
-      const source = bundle.sources[b] ?? null
-      if (!source) return { saved, source }
-      const base = b * BANK_PADS
-      const trim = trimSource({
-        frames: source.left.length,
-        maxFrames: Math.floor(MAX_SOURCE_SECONDS * source.sampleRate),
-        markers: saved.markers,
-        padSlices: inBank(padSlices, b),
-        padSpans: inBank(padSpans, b),
-        labels: saved.labels,
-        ownPads: inBank(pads, b).map((p) => !!p.sample),
-      })
-      padSlices.splice(base, trim.padSlices.length, ...trim.padSlices)
-      padSpans.splice(base, trim.padSpans.length, ...trim.padSpans)
-      for (const { pad, range } of trim.detached) {
-        const audio = this.detachedAudio(this.banks[b], range)
-        const meta: SampleMeta = {
-          id: newId(),
-          name: `${source.name} ${pad + 1}`,
-          category: this.labelOf(base + pad)?.category ?? 'perc',
-          sampleRate: this.sampleRate,
-          frames: audio.left.length,
-          createdAt: Date.now(),
-          settings: {},
-        }
-        pads[base + pad] = { ...pads[base + pad], sample: { id: meta.id, name: meta.name, category: meta.category as Category } }
-        detached.push({ meta, ...audio })
+    const detached = trim.detached.map(({ pad, range }) => {
+      const bank = this.banks[bankOf(pad)]
+      const audio = this.detachedAudio(bank, range)
+      const meta: SampleMeta = {
+        id: newId(),
+        name: `${bank.sample?.name ?? 'sample'} ${(pad % BANK_PADS) + 1}`,
+        category: this.labelOf(pad)?.category ?? 'perc',
+        sampleRate: this.sampleRate,
+        frames: audio.left.length,
+        createdAt: Date.now(),
+        settings: {},
       }
-      return {
-        saved: { ...saved, markers: trim.markers, labels: trim.labels },
-        source: { ...source, left: source.left.slice(trim.start, trim.end), right: source.right.slice(trim.start, trim.end) },
-      }
+      pads[pad] = { ...pads[pad], sample: { id: meta.id, name: meta.name, category: meta.category as Category } }
+      return { meta, ...audio }
     })
     return {
-      project: { name: bundle.project.name, state: { ...st, banks: banks.map((b) => b.saved), padSlices, padSpans, pads } },
-      sources: banks.map((b) => b.source),
+      project: {
+        name: bundle.project.name,
+        state: {
+          ...st,
+          banks: st.banks.map((saved, b) => ({ ...saved, ...trim.banks[b] })),
+          padSlices: trim.padSlices,
+          padSpans: trim.padSpans,
+          pads,
+        },
+      },
+      sources: bundle.sources.map((source, b) => {
+        const window = trim.windows[b]
+        return source && window && { ...source, left: source.left.slice(...window), right: source.right.slice(...window) }
+      }),
       samples: [...bundle.samples, ...detached],
     }
   }
