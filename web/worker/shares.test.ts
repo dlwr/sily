@@ -1,3 +1,4 @@
+import { unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { pack, type Bundle } from '../src/storage/bundle'
 import { handlePublicShare, handleShares, type ShareRecord, type ShareStore } from './shares'
@@ -77,6 +78,34 @@ describe('handleShares', () => {
   it('rejects an upload that is too large', async () => {
     const { store } = memoryStore()
     expect((await upload(store, new Uint8Array(21 * 1024 * 1024))).status).toBe(413)
+  })
+
+  it('rejects a streamed upload that grows too large', async () => {
+    const { store } = memoryStore()
+    const chunk = new Uint8Array(1024 * 1024)
+    let sent = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent++ > 24) controller.close()
+        else controller.enqueue(chunk)
+      },
+    })
+    const request = new Request('https://sily.test/api/shares', { method: 'POST', body, duplex: 'half' } as RequestInit)
+    expect((await handleShares(request, 'a@example.com', store, now, nextId)).status).toBe(413)
+  })
+
+  it('rejects source audio longer than its manifest says', async () => {
+    const { store } = memoryStore()
+    const files = unzipSync(bundle())
+    files['source.f32'] = new Uint8Array(1600 * 8)
+    expect((await upload(store, zipSync(files))).status).toBe(400)
+  })
+
+  it('rejects a bundle that would unpack too large', async () => {
+    const { store } = memoryStore()
+    const files = unzipSync(bundle())
+    files['samples/huge.f32'] = new Uint8Array(65 * 1024 * 1024)
+    expect((await upload(store, zipSync(files, { level: 9 }))).status).toBe(400)
   })
 
   it('refuses a fourth upload on the same day', async () => {

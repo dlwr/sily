@@ -26,14 +26,52 @@ type Manifest = {
   source?: { sampleRate?: number; frames?: number } | null
 }
 
+const MAX_MANIFEST_BYTES = 1024 * 1024
+const MAX_UNPACKED_BYTES = 64 * 1024 * 1024
+const BYTES_PER_FRAME = 8
+
 const readManifest = (bytes: Uint8Array): Manifest | null => {
   try {
-    const files = unzipSync(bytes, { filter: (f) => f.name === 'project.json' })
+    const sizes = new Map<string, number>()
+    const files = unzipSync(bytes, {
+      filter: (f) => {
+        sizes.set(f.name, f.originalSize)
+        return f.name === 'project.json' && f.originalSize <= MAX_MANIFEST_BYTES
+      },
+    })
     const manifest = JSON.parse(strFromU8(files['project.json'])) as Manifest
-    return manifest.format === 'sily' ? manifest : null
+    if (manifest.format !== 'sily') return null
+    if ([...sizes.values()].reduce((a, b) => a + b, 0) > MAX_UNPACKED_BYTES) return null
+    const sourceBytes = sizes.get('source.f32') ?? 0
+    if (sourceBytes !== (manifest.source ? (manifest.source.frames ?? 0) * BYTES_PER_FRAME : 0)) return null
+    return manifest
   } catch {
     return null
   }
+}
+
+const readCapped = async (request: Request, max: number): Promise<Uint8Array | null> => {
+  if (!request.body) return new Uint8Array()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  const reader = request.body.getReader()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > max) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return out
 }
 
 const startOfUtcDay = (at: Date) => new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate())).toISOString()
@@ -50,8 +88,8 @@ export async function handleShares(
     if (request.method === 'GET') return json(await store.list(owner))
     if (request.method !== 'POST') return new Response(null, { status: 405 })
     if (Number(request.headers.get('content-length') ?? 0) > MAX_SHARE_BYTES) return new Response(null, { status: 413 })
-    const body = new Uint8Array(await request.arrayBuffer())
-    if (body.byteLength > MAX_SHARE_BYTES) return new Response(null, { status: 413 })
+    const body = await readCapped(request, MAX_SHARE_BYTES)
+    if (!body) return new Response(null, { status: 413 })
     const manifest = readManifest(body)
     if (!manifest) return new Response(null, { status: 400 })
     const source = manifest.source
