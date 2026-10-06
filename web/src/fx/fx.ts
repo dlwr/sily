@@ -51,3 +51,13 @@ export const presetsFor = (category: Category | undefined): { name: string; sett
 
 export const isFlat = (fx: FxSettings): boolean =>
   fx.highpass_hz === 0 && fx.lowpass_hz === 0 && fx.low_db === 0 && fx.mid_db === 0 && fx.high_db === 0 && fx.drive_db === 0
+
+export type Returns = {
+  reverb: { size: number; damping: number; level: number }
+  delay: { beats: number; feedback: number; toneHz: number; pingPong: boolean; level: number }
+}
+
+export const DEFAULT_RETURNS: Returns = {
+  reverb: { size: 0.5, damping: 0.5, level: 1 },
+  delay: { beats: 0.75, feedback: 0.35, toneHz: 4000, pingPong: true, level: 1 },
+}
