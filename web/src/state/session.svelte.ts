@@ -90,6 +90,7 @@ const freshPad = (): PadSettings => ({
   fxAuto: true,
 })
 const CORRECTIONS_KEY = 'sily.corrections'
+const CORRECTIONS_REFUSED_KEY = 'sily.corrections.refused'
 const CLASSIFY_DELAY_MS = 150
 const MAX_CLASSIFIED = 128
 const PITCHEDNESS = 11
@@ -142,6 +143,7 @@ export class Session {
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
   correctionLogin = $state(false)
+  correctionsRefused = $state(readRefused())
   correctionsSent = $state(0)
   correctionsUnsent = $state(0)
   style = $state<StyleChoice>('auto')
@@ -957,6 +959,10 @@ export class Session {
         this.correctionLogin = true
         break
       }
+      if (result === 'refused') {
+        this.refuseCorrections()
+        break
+      }
       this.unsentCorrections.shift()
       this.correctionsUnsent = this.unsentCorrections.length
       if (result === 'saved') {
@@ -967,9 +973,17 @@ export class Session {
     this.sendingCorrections = false
   }
 
+  private refuseCorrections() {
+    this.correctionsRefused = true
+    this.correctionLogin = false
+    this.unsentCorrections = []
+    this.correctionsUnsent = 0
+    writeRefused()
+  }
+
   private sendCorrection(slice: number, label: Category) {
     const start = this.sliceStart(slice)
-    if (start === null || !this.sample) return
+    if (start === null || !this.sample || this.correctionsRefused) return
     const end = this.markers[slice + 1] ?? this.sample.left.length
     const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
     this.sent.set(this.sample, [...(this.sent.get(this.sample) ?? []), { wav, label }])
@@ -980,7 +994,7 @@ export class Session {
 
   setHeldOut(heldOut: boolean) {
     this.heldOut = heldOut
-    if (!this.sample) return
+    if (!this.sample || this.correctionsRefused) return
     for (const { wav, label } of this.sent.get(this.sample) ?? []) {
       this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.sample) })
     }
@@ -1851,6 +1865,22 @@ export class Session {
 }
 
 type Correction = { features: number[]; label: Category }
+
+function readRefused(): boolean {
+  try {
+    return localStorage.getItem(CORRECTIONS_REFUSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeRefused() {
+  try {
+    localStorage.setItem(CORRECTIONS_REFUSED_KEY, '1')
+  } catch {
+    return
+  }
+}
 
 function readCorrections(): Correction[] {
   try {
