@@ -19,15 +19,28 @@ const TOTAL = 20
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
+type Audio = { sampleRate?: unknown; frames?: unknown }
+
 type Manifest = {
   format?: string
   project?: { name?: unknown; state?: { bpm?: unknown } }
-  source?: { sampleRate?: number; frames?: number } | null
+  source?: Audio | null
+  samples?: (Audio & { id?: unknown })[]
 }
 
 const MAX_MANIFEST_BYTES = 1024 * 1024
 const MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 const BYTES_PER_FRAME = 8
+
+const MIN_SAMPLE_RATE = 8000
+const MAX_SAMPLE_RATE = 192000
+
+const plausible = ({ sampleRate, frames }: Audio) =>
+  typeof sampleRate === 'number' &&
+  sampleRate >= MIN_SAMPLE_RATE &&
+  sampleRate <= MAX_SAMPLE_RATE &&
+  Number.isInteger(frames) &&
+  (frames as number) >= 0
 
 const readManifest = (bytes: Uint8Array): Manifest | null => {
   try {
@@ -41,8 +54,15 @@ const readManifest = (bytes: Uint8Array): Manifest | null => {
     const manifest = JSON.parse(strFromU8(files['project.json'])) as Manifest
     if (manifest.format !== 'sily') return null
     if ([...sizes.values()].reduce((a, b) => a + b, 0) > MAX_UNPACKED_BYTES) return null
-    const sourceBytes = sizes.get('source.f32') ?? 0
-    if (sourceBytes !== (manifest.source ? (manifest.source.frames ?? 0) * BYTES_PER_FRAME : 0)) return null
+    const expected = new Map<string, Audio>([['project.json', {}]])
+    if (manifest.source) expected.set('source.f32', manifest.source)
+    for (const sample of manifest.samples ?? []) expected.set(`samples/${sample.id}.f32`, sample)
+    if (sizes.size !== expected.size) return null
+    for (const [name, audio] of expected) {
+      if (!sizes.has(name)) return null
+      if (name === 'project.json') continue
+      if (!plausible(audio) || sizes.get(name) !== (audio.frames as number) * BYTES_PER_FRAME) return null
+    }
     return manifest
   } catch {
     return null
@@ -92,7 +112,7 @@ export async function handleShares(
     const manifest = readManifest(body)
     if (!manifest) return new Response(null, { status: 400 })
     const source = manifest.source
-    if (source && (source.frames ?? 0) > MAX_SOURCE_SECONDS * (source.sampleRate ?? 0)) return new Response(null, { status: 400 })
+    if (source && (source.frames as number) > MAX_SOURCE_SECONDS * (source.sampleRate as number)) return new Response(null, { status: 400 })
     const name = typeof manifest.project?.name === 'string' ? manifest.project.name.slice(0, 100) : '無題'
     const bpm = typeof manifest.project?.state?.bpm === 'number' ? manifest.project.state.bpm : null
     const record = { id: newId(), name, bpm, createdAt: now.toISOString() }
