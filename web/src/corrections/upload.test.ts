@@ -24,9 +24,14 @@ describe('uploadCorrection', () => {
     expect(await uploadCorrection(wav, 'kick', 'train')).toBe('login')
   })
 
-  it('asks for login when the worker refuses', async () => {
-    respond({ ok: false, status: 403, type: 'basic' })
+  it('asks for login when the worker sees no login', async () => {
+    respond({ ok: false, status: 401, type: 'basic' })
     expect(await uploadCorrection(wav, 'kick', 'train')).toBe('login')
+  })
+
+  it('tells when the person logged in may not send corrections', async () => {
+    respond({ ok: false, status: 403, type: 'basic' })
+    expect(await uploadCorrection(wav, 'kick', 'train')).toBe('refused')
   })
 
   it('reports failure on other errors', async () => {

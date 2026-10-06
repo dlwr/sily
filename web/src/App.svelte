@@ -4,22 +4,32 @@
   import PadInspector from './components/PadInspector.svelte'
   import Pads from './components/Pads.svelte'
   import PatternGrid from './components/PatternGrid.svelte'
+  import SharedBanner from './components/SharedBanner.svelte'
   import SliceTools from './components/SliceTools.svelte'
   import SongBar from './components/SongBar.svelte'
   import SourceSpeed from './components/SourceSpeed.svelte'
   import Transport from './components/Transport.svelte'
   import Waveform from './components/Waveform.svelte'
   import { labelForCode, noteForCode, padForCode } from './state/keymap'
+  import { fetchShare, sharedIdFrom } from './share/api'
   import { Session } from './state/session.svelte'
 
   const session = new Session()
   let starting = $state(false)
   let failed = $state('')
+  const sharedId = sharedIdFrom(location.pathname)
+  const sharedBytes = sharedId ? fetchShare(sharedId) : null
+  const sharedTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') ?? null
 
   const start = async () => {
     starting = true
     try {
-      await session.start()
+      const bytes = await sharedBytes
+      if (sharedId && !bytes) {
+        failed = '共有されたプロジェクトを取れなかった'
+        return
+      }
+      await session.start(sharedId && bytes ? { id: sharedId, bytes } : undefined)
     } catch (e) {
       failed = e instanceof Error ? e.message : String(e)
     } finally {
@@ -126,11 +136,17 @@
 {#if !session.sily}
   <main class="start">
     <h1>sily</h1>
-    <p class="muted">サンプルを取り込んで、切って、叩いてループを作る。</p>
-    <button class="go" onclick={start} disabled={starting}>{starting ? '準備中…' : '音を出す準備をする'}</button>
+    {#if sharedId}
+      <p>{sharedTitle ?? '共有されたプロジェクト'}</p>
+      <button class="go" onclick={start} disabled={starting}>{starting ? '準備中…' : '開いて鳴らす'}</button>
+    {:else}
+      <p class="muted">サンプルを取り込んで、切って、叩いてループを作る。</p>
+      <button class="go" onclick={start} disabled={starting}>{starting ? '準備中…' : '音を出す準備をする'}</button>
+    {/if}
     {#if failed}<p class="error">起動できなかった: {failed}</p>{/if}
   </main>
 {:else}
+  <SharedBanner {session} />
   <Transport {session} />
   <main>
     <section class="source">

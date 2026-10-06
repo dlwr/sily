@@ -11,7 +11,7 @@ import { probeScores, type Probe } from '../classify/probe'
 import probe from '../classify/probe.json'
 import { DEFAULT_FX, isFlat, type FxSettings } from '../fx/fx'
 import { newId } from '../storage/db'
-import { pack, unpack } from '../storage/bundle'
+import { pack, unpack, withFreshSampleIds, type Bundle } from '../storage/bundle'
 import { deleteSample, importSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
 import {
   deleteProject,
@@ -20,6 +20,7 @@ import {
   saveProject,
   saveSource,
   type ProjectDoc,
+  type SourceAudio,
 } from '../storage/projects'
 import { untrack } from 'svelte'
 import { candidateStyles, generate, type PadInfo, type Style, type StyleChoice } from '../generate/generate'
@@ -34,6 +35,9 @@ import { History } from './history'
 import { copyPattern, flattenSong, sectionAt, type Pattern } from './song'
 import { followMarkers, minSliceSeconds } from './markers'
 import { frameAt } from './timing'
+import { uploadShare } from '../share/api'
+import { MAX_SHARE_BYTES, MAX_SOURCE_SECONDS } from '../share/limits'
+import { trimSource } from '../share/trim'
 import { noteOn, padForMidiNote, semitonesForMidiNote } from './midi'
 
 export type PadSettings = {
@@ -87,6 +91,7 @@ const freshPad = (): PadSettings => ({
   fxAuto: true,
 })
 const CORRECTIONS_KEY = 'sily.corrections'
+const CORRECTIONS_REFUSED_KEY = 'sily.corrections.refused'
 const CLASSIFY_DELAY_MS = 150
 const MAX_CLASSIFIED = 128
 const PITCHEDNESS = 11
@@ -140,6 +145,7 @@ export class Session {
   labels = $state<Record<number, Label>>({})
   correctionCount = $state(readCorrections().length)
   correctionLogin = $state(false)
+  correctionsRefused = $state(readRefused())
   correctionsSent = $state(0)
   correctionsUnsent = $state(0)
   style = $state<StyleChoice>('auto')
@@ -160,6 +166,11 @@ export class Session {
   projectId = $state<string | null>(null)
   projectName = $state('無題')
   projects = $state<ProjectDoc[]>([])
+  shared = $state<{ id: string; name: string } | null>(null)
+  sharing = $state(false)
+  shareLogin = $state(false)
+  private sharedBundle: Bundle | null = null
+  private sharedSamples = new Map<string, { meta: SampleMeta; left: Float32Array; right: Float32Array }>()
   private sourceId: string | null = null
   private lastSaved = ''
   private saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -308,7 +319,7 @@ export class Session {
     return this.sily?.sampleRate ?? 44100
   }
 
-  async start() {
+  async start(shared?: { id: string; bytes: Uint8Array }) {
     if (this.sily) return
     const sily = await Sily.create()
     sily.onTick = (t) => {
@@ -333,7 +344,8 @@ export class Session {
     this.syncGroove()
     await this.refreshProjects()
     const last = readLastProject()
-    if (last && this.projects.some((p) => p.id === last)) await this.openProject(last)
+    if (shared) await this.openShared(shared.id, shared.bytes)
+    else if (last && this.projects.some((p) => p.id === last)) await this.openProject(last)
     else await this.newProject()
     $effect.root(() => {
       $effect(() => {
@@ -421,6 +433,7 @@ export class Session {
 
   async newProject() {
     await this.flushSave()
+    this.leaveShared()
     this.projectId = newId()
     this.projectName = `無題 ${new Date().toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
     writeLastProject(this.projectId)
@@ -442,15 +455,54 @@ export class Session {
     const loaded = await loadProject(id)
     if (!loaded) return
     const { doc, source } = loaded
-    const st = doc.state as ReturnType<Session['projectState']>
+    this.leaveShared()
     this.projectId = id
-    this.projectName = doc.name
     writeLastProject(id)
+    this.applyProject(doc.name, doc.state, source, doc.sourceName, doc.sourceId)
+  }
+
+  async openShared(id: string, bytes: Uint8Array) {
+    if (!this.sily) return
+    let bundle: Bundle
+    try {
+      bundle = unpack(bytes)
+    } catch {
+      this.message = '共有されたプロジェクトを読み込めなかった'
+      return
+    }
+    await this.flushSave()
+    this.projectId = null
+    this.sharedBundle = bundle
+    this.shared = { id, name: bundle.project.name }
+    this.sharedSamples = new Map(bundle.samples.map((s) => [s.meta.id, s]))
+    this.applyProject(bundle.project.name, bundle.project.state, bundle.source, bundle.source?.name ?? null, null)
+    if (this.events.length > 0 || this.song.length > 0) this.togglePlaying()
+  }
+
+  async saveShared() {
+    const bundle = this.sharedBundle
+    if (!bundle) return
+    if (this.playing) this.togglePlaying()
+    await this.importBundle(withFreshSampleIds(bundle, newId))
+  }
+
+  private leaveShared() {
+    if (!this.shared) return
+    this.shared = null
+    this.sharedBundle = null
+    this.sharedSamples.clear()
+    history.replaceState(null, '', '/')
+  }
+
+  private applyProject(name: string, state: Record<string, unknown>, source: SourceAudio | null, sourceName: string | null, sourceId: string | null) {
+    if (!this.sily) return
+    const st = state as ReturnType<Session['projectState']>
+    this.projectName = name
     if (source) {
       const left = resample(source.left, source.sampleRate, this.sampleRate)
       const right = resample(source.right, source.sampleRate, this.sampleRate)
-      this.setSample(doc.sourceName ?? 'source', left, right)
-      this.sourceId = source.sampleRate === this.sampleRate ? doc.sourceId : null
+      this.setSample(sourceName ?? 'source', left, right)
+      this.sourceId = source.sampleRate === this.sampleRate ? sourceId : null
     } else {
       this.clearSource()
     }
@@ -501,11 +553,11 @@ export class Session {
     this.lastSaved = JSON.stringify(this.projectState())
   }
 
-  async exportProject() {
+  private async bundle(): Promise<Bundle> {
     await this.flushSave()
     const ids = [...new Set(this.pads.flatMap((p) => (p.sample ? [p.sample.id] : [])))]
-    const samples = (await Promise.all(ids.map((id) => loadSample(id)))).flatMap((s) => (s ? [s] : []))
-    const bytes = pack({
+    const samples = (await Promise.all(ids.map((id) => this.sharedSamples.get(id) ?? loadSample(id)))).flatMap((s) => (s ? [s] : []))
+    return {
       project: { name: this.projectName, state: JSON.parse(JSON.stringify(this.projectState())) },
       source: this.sample && {
         name: this.sample.name,
@@ -514,13 +566,108 @@ export class Session {
         right: this.sample.right,
       },
       samples,
-    })
+    }
+  }
+
+  async exportProject() {
+    const bytes = pack(await this.bundle())
     download(new Blob([bytes.slice()], { type: 'application/zip' }), `${this.projectName}.sily`)
+  }
+
+  private async shareBundle(): Promise<Bundle> {
+    const bundle = await this.bundle()
+    const source = bundle.source
+    if (!source) return bundle
+    const st = bundle.project.state as ReturnType<Session['projectState']>
+    const trim = trimSource({
+      frames: source.left.length,
+      maxFrames: Math.floor(MAX_SOURCE_SECONDS * source.sampleRate),
+      markers: st.markers,
+      padSlices: st.padSlices,
+      padSpans: st.padSpans,
+      labels: st.labels,
+      ownPads: st.pads.map((p) => !!p.sample),
+    })
+    const detached = trim.detached.map(({ pad, range }) => {
+      const audio = this.detachedAudio(range)
+      const category = this.labelOf(pad)?.category ?? 'perc'
+      const meta: SampleMeta = {
+        id: newId(),
+        name: `${source.name} ${pad + 1}`,
+        category,
+        sampleRate: this.sampleRate,
+        frames: audio.left.length,
+        createdAt: Date.now(),
+        settings: {},
+      }
+      return { pad, sample: { meta, ...audio } }
+    })
+    const pads = st.pads.map((p, pad) => {
+      const d = detached.find((x) => x.pad === pad)
+      return d ? { ...p, sample: { id: d.sample.meta.id, name: d.sample.meta.name, category: d.sample.meta.category as Category } } : p
+    })
+    return {
+      project: {
+        name: bundle.project.name,
+        state: { ...st, markers: trim.markers, padSlices: trim.padSlices, padSpans: trim.padSpans, labels: trim.labels, pads },
+      },
+      source: { ...source, left: source.left.slice(trim.start, trim.end), right: source.right.slice(trim.start, trim.end) },
+      samples: [...bundle.samples, ...detached.map((d) => d.sample)],
+    }
+  }
+
+  private detachedAudio([start, end]: [number, number]): { left: Float32Array; right: Float32Array } {
+    const engine = this.engineSample ?? this.sample!
+    const [a, b] = [this.map.toEngine(start), this.map.toEngine(end)]
+    const rate = this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1
+    return {
+      left: resample(engine.left.subarray(a, b), this.sampleRate * rate, this.sampleRate),
+      right: resample(engine.right.subarray(a, b), this.sampleRate * rate, this.sampleRate),
+    }
+  }
+
+  async shareProject() {
+    if (this.sharing) return
+    this.sharing = true
+    try {
+      const bytes = pack(await this.shareBundle())
+      if (bytes.byteLength > MAX_SHARE_BYTES) {
+        this.message = `共有するには大きすぎる（${(bytes.byteLength / 1e6).toFixed(0)} MB。上限は ${MAX_SHARE_BYTES / 1024 / 1024} MB）`
+        return
+      }
+      const result = await uploadShare(bytes)
+      this.shareLogin = result === 'login'
+      if (typeof result === 'object') {
+        const url = new URL(result.url, location.origin).href
+        const copied = await navigator.clipboard?.writeText(url).then(
+          () => true,
+          () => false,
+        )
+        this.message = copied ? `共有リンクをコピーした: ${url}` : `共有リンク: ${url}`
+        return
+      }
+      this.message = {
+        login: '共有するにはログインが要る',
+        daily: '共有は1日3つまで',
+        total: '共有は20個まで。「共有したもの」から消すと増やせる',
+        large: '共有するには大きすぎる',
+        failed: '共有できなかった',
+      }[result]
+    } finally {
+      this.sharing = false
+    }
   }
 
   async importProject(file: File) {
     try {
-      const bundle = unpack(new Uint8Array(await file.arrayBuffer()))
+      await this.importBundle(withFreshSampleIds(unpack(new Uint8Array(await file.arrayBuffer())), newId))
+    } catch {
+      this.message = `${file.name} をプロジェクトとして読み込めなかった`
+    }
+  }
+
+  private async importBundle(bundle: Bundle) {
+    try {
       for (const sample of bundle.samples) await importSample(sample)
       const source = bundle.source
       const sourceId = source ? await saveSource(source.left, source.right, source.sampleRate) : null
@@ -538,7 +685,7 @@ export class Session {
       await this.refreshLibrary()
       await this.openProject(id)
     } catch {
-      this.message = `${file.name} をプロジェクトとして読み込めなかった`
+      this.message = `「${bundle.project.name}」を保存できなかった`
     }
   }
 
@@ -815,6 +962,10 @@ export class Session {
         this.correctionLogin = true
         break
       }
+      if (result === 'refused') {
+        this.refuseCorrections()
+        break
+      }
       this.unsentCorrections.shift()
       this.correctionsUnsent = this.unsentCorrections.length
       if (result === 'saved') {
@@ -825,9 +976,17 @@ export class Session {
     this.sendingCorrections = false
   }
 
+  private refuseCorrections() {
+    this.correctionsRefused = true
+    this.correctionLogin = false
+    this.unsentCorrections = []
+    this.correctionsUnsent = 0
+    writeRefused()
+  }
+
   private sendCorrection(slice: number, label: Category) {
     const start = this.sliceStart(slice)
-    if (start === null || !this.sample) return
+    if (start === null || !this.sample || this.correctionsRefused) return
     const end = this.markers[slice + 1] ?? this.sample.left.length
     const wav = encodeWav24(this.sample.left.subarray(start, end), this.sample.right.subarray(start, end), this.sampleRate)
     this.sent.set(this.sample, [...(this.sent.get(this.sample) ?? []), { wav, label }])
@@ -838,7 +997,7 @@ export class Session {
 
   setHeldOut(heldOut: boolean) {
     this.heldOut = heldOut
-    if (!this.sample) return
+    if (!this.sample || this.correctionsRefused) return
     for (const { wav, label } of this.sent.get(this.sample) ?? []) {
       this.unsentCorrections.push({ wav, label, split: this.splitToSend(this.sample) })
     }
@@ -1199,7 +1358,8 @@ export class Session {
       }
       if (p.sample && !this.own.has(pad)) {
         const id = p.sample.id
-        loadSample(id).then((loaded) => {
+        const shared = this.sharedSamples.get(id)
+        ;(shared ? Promise.resolve(shared) : loadSample(id)).then((loaded) => {
           if (!loaded || this.pads[pad].sample?.id !== id) return
           const left = resample(loaded.left, loaded.meta.sampleRate, this.sampleRate)
           const right = resample(loaded.right, loaded.meta.sampleRate, this.sampleRate)
@@ -1738,6 +1898,22 @@ export class Session {
 }
 
 type Correction = { features: number[]; label: Category }
+
+function readRefused(): boolean {
+  try {
+    return localStorage.getItem(CORRECTIONS_REFUSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeRefused() {
+  try {
+    localStorage.setItem(CORRECTIONS_REFUSED_KEY, '1')
+  } catch {
+    return
+  }
+}
 
 function readCorrections(): Correction[] {
   try {
