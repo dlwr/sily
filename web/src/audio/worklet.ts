@@ -28,10 +28,10 @@ class SilyProcessor extends AudioWorkletProcessor {
     const w = this.wasm
     switch (msg.type) {
       case 'load':
-        withFloats(w, [msg.left, msg.right], ([l, r]) => w.engine_load(l, r, msg.left.length))
+        withFloats(w, [msg.left, msg.right], ([l, r]) => w.engine_load(msg.source, l, r, msg.left.length))
         break
       case 'markers':
-        withU32(w, msg.frames, (ptr) => w.engine_set_markers(ptr, msg.frames.length))
+        withU32(w, msg.frames, (ptr) => w.engine_set_markers(msg.source, ptr, msg.frames.length))
         break
       case 'fx': {
         const f = msg.fx
@@ -67,7 +67,7 @@ class SilyProcessor extends AudioWorkletProcessor {
         w.engine_clear_pad_stretched(msg.pad)
         break
       case 'sourceRate':
-        w.engine_set_source_rate(msg.rate)
+        w.engine_set_source_rate(msg.source, msg.rate)
         break
       case 'trigger':
         w.engine_trigger(msg.pad, msg.velocity, msg.pitch)
@@ -83,7 +83,7 @@ class SilyProcessor extends AudioWorkletProcessor {
         else w.engine_release(msg.pad)
         break
       case 'audition':
-        w.engine_audition(msg.from ?? -1)
+        w.engine_audition(msg.source, msg.from ?? -1)
         break
       case 'transport':
         w.engine_set_bpm(msg.bpm)

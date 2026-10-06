@@ -3,12 +3,12 @@ export type SilyExports = {
   alloc(bytes: number): number
   dealloc(ptr: number, bytes: number): void
   engine_init(sampleRate: number, maxBlock: number): void
-  engine_load(left: number, right: number, frames: number): void
-  engine_set_markers(ptr: number, len: number): void
+  engine_load(source: number, left: number, right: number, frames: number): void
+  engine_set_markers(source: number, ptr: number, len: number): void
   engine_set_pad(pad: number, pitch: number, gain: number, reverse: number): void
   engine_set_pad_stretched(pad: number, pitch: number, left: number, right: number, frames: number): void
   engine_clear_pad_stretched(pad: number): void
-  engine_set_source_rate(rate: number): void
+  engine_set_source_rate(source: number, rate: number): void
   engine_trigger(pad: number, velocity: number, pitch: number): void
   engine_trigger_note(slice: number, semitones: number, velocity: number): void
   engine_hold(pad: number, velocity: number, pitch: number, time: number): void
@@ -19,7 +19,7 @@ export type SilyExports = {
   engine_repeat_velocity(i: number): number
   engine_repeat_pitch(i: number): number
   engine_repeat_beat(i: number): number
-  engine_audition(fromFrame: number): void
+  engine_audition(source: number, fromFrame: number): void
   engine_audition_frame(): number
   engine_set_bpm(bpm: number): void
   engine_set_playing(playing: number): void

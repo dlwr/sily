@@ -720,7 +720,7 @@ export class Session {
     this.padSlices = identity()
     this.padSpans = noSpans()
     this.stopAudition()
-    this.sily?.send({ type: 'load', left: new Float32Array(0), right: new Float32Array(0) })
+    this.sily?.send({ type: 'load', source: 0, left: new Float32Array(0), right: new Float32Array(0) })
     this.history = new History<Doc>()
   }
 
@@ -750,7 +750,7 @@ export class Session {
     this.kitPending = false
     this.playWhenBuilt = false
     this.loadEngineSample(left, right, null)
-    this.sily.send({ type: 'sourceRate', rate: 1 })
+    this.sily.send({ type: 'sourceRate', source: 0, rate: 1 })
     this.adopt()
     this.history = new History<Doc>()
     this.markers = []
@@ -822,12 +822,12 @@ export class Session {
     const engineFrame = this.map.toEngine(frame)
     this.auditionFrame = frame
     this.lastTick = { frame: engineFrame, time: this.sily.ctx.currentTime }
-    this.sily.send({ type: 'audition', from: engineFrame })
+    this.sily.send({ type: 'audition', source: 0, from: engineFrame })
   }
 
   stopAudition() {
     this.auditionFrame = null
-    this.sily?.send({ type: 'audition', from: null })
+    this.sily?.send({ type: 'audition', source: 0, from: null })
   }
 
   markAtKey(timeStamp: number) {
@@ -1812,9 +1812,9 @@ export class Session {
   private snapshot(loops: number): ToWorklet[] {
     const { left, right } = this.engineSample!
     return [
-      { type: 'load', left, right },
-      { type: 'sourceRate', rate: this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1 },
-      { type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) },
+      { type: 'load', source: 0, left, right },
+      { type: 'sourceRate', source: 0, rate: this.sourceSpeed.mode === 'tape' ? this.sourceSpeed.rate : 1 },
+      { type: 'markers', source: 0, frames: this.markers.map((m) => this.map.toEngine(m)) },
       { type: 'padSlices', slices: [...this.padSlices] },
       { type: 'padSpans', spans: this.engineSpans() },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
@@ -1842,7 +1842,7 @@ export class Session {
       this.loadEngineSample(out.left, out.right, stretch)
       this.sendMarkers()
     }
-    this.sily.send({ type: 'sourceRate', rate: mode === 'tape' ? rate : 1 })
+    this.sily.send({ type: 'sourceRate', source: 0, rate: mode === 'tape' ? rate : 1 })
     this.invalidateStretched()
   }
 
@@ -1859,11 +1859,11 @@ export class Session {
     this.engineSample = { left, right }
     this.loadedStretch = stretch
     this.map = new SourceMap(this.sample?.left.length ?? left.length, left.length)
-    this.sily?.send({ type: 'load', left: left.slice(), right: right.slice() })
+    this.sily?.send({ type: 'load', source: 0, left: left.slice(), right: right.slice() })
   }
 
   private sendMarkers() {
-    this.sily?.send({ type: 'markers', frames: this.markers.map((m) => this.map.toEngine(m)) })
+    this.sily?.send({ type: 'markers', source: 0, frames: this.markers.map((m) => this.map.toEngine(m)) })
     this.sily?.send({ type: 'padSlices', slices: [...this.padSlices] })
     this.sily?.send({ type: 'padSpans', spans: this.engineSpans() })
   }
