@@ -171,10 +171,10 @@
   <main>
     <section class="source">
       <div class="title">
-        <h2>{session.sample?.name ?? 'ソース'}</h2>
-        {#if session.sample}
+        <h2>{session.bank.sample?.name ?? 'ソース'}</h2>
+        {#if session.bank.sample}
           <span class="muted num">
-            {(session.sample.left.length / session.sampleRate).toFixed(2)} 秒 / {Math.max(1, session.markers.length)} スライス
+            {(session.bank.sample.left.length / session.sampleRate).toFixed(2)} 秒 / {Math.max(1, session.bank.markers.length)} スライス
           </span>
         {/if}
         {#if session.processing > 0}<span class="muted">ストレッチを計算中…</span>{/if}

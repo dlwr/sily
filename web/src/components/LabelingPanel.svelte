@@ -21,15 +21,15 @@
     <label class="held-out">
       <input
         type="checkbox"
-        checked={session.heldOut || session.splitByHash === 'eval'}
-        disabled={session.splitByHash === 'eval'}
+        checked={session.bank.heldOut || session.bank.splitByHash === 'eval'}
+        disabled={session.bank.splitByHash === 'eval'}
         onchange={(e) => {
           session.setHeldOut(e.currentTarget.checked)
           e.currentTarget.blur()
         }}
       />
       この録音を評価用にする
-      <span class="muted">{session.splitByHash === 'eval' ? '（自動で評価用になっている）' : '（学習には使わず、精度を測るのに使う）'}</span>
+      <span class="muted">{session.bank.splitByHash === 'eval' ? '（自動で評価用になっている）' : '（学習には使わず、精度を測るのに使う）'}</span>
     </label>
   </div>
   <div class="keys">

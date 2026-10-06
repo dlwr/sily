@@ -36,7 +36,7 @@
       ヨレ
       <input type="range" min="0" max="1" step="0.05" bind:value={session.looseness} />
     </label>
-    <button class="go" onclick={() => session.generateCandidates()} disabled={!session.sample || session.songMode}>
+    <button class="go" onclick={() => session.generateCandidates()} disabled={!session.bank.sample || session.songMode}>
       自動で組む <kbd>G</kbd>
     </button>
   </div>

@@ -58,13 +58,13 @@
     </button>
   </div>
   <div class="group">
-    <button aria-pressed={session.auditionFrame !== null} onclick={() => session.toggleAudition()} disabled={!session.sample}>
+    <button aria-pressed={session.auditionFrame !== null} onclick={() => session.toggleAudition()} disabled={!session.bank.sample}>
       試聴 <kbd>P</kbd>
     </button>
     <span class="muted">再生中に <kbd>M</kbd> でマーカー</span>
   </div>
   <div class="group">
-    <button onclick={() => session.detectOnsets()} disabled={!session.sample}>トランジェント検出</button>
+    <button onclick={() => session.detectOnsets()} disabled={!session.bank.sample}>トランジェント検出</button>
     <input
       type="range"
       min="0"
@@ -77,12 +77,12 @@
   <div class="group">
     均等
     {#each [4, 8, 16] as n}
-      <button onclick={() => session.gridSlice(n)} disabled={!session.sample}>{n}</button>
+      <button onclick={() => session.gridSlice(n)} disabled={!session.bank.sample}>{n}</button>
     {/each}
-    <button onclick={() => session.clearMarkers()} disabled={session.markers.length === 0}>マーカー消去</button>
+    <button onclick={() => session.clearMarkers()} disabled={session.bank.markers.length === 0}>マーカー消去</button>
   </div>
   <div class="group">
-    <button aria-pressed={session.labelingSlice !== null} onclick={() => (session.labelingSlice === null ? session.startLabeling() : session.stopLabeling())} disabled={!session.sample}>
+    <button aria-pressed={session.labelingSlice !== null} onclick={() => (session.labelingSlice === null ? session.startLabeling() : session.stopLabeling())} disabled={!session.bank.sample}>
       ラベル付け <kbd>L</kbd>
     </button>
   </div>

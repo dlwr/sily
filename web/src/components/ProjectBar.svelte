@@ -56,7 +56,7 @@
   />
   <button class:danger={confirming} onclick={remove}>{confirming ? '本当に削除' : '削除'}</button>
   {#if !session.shared}
-    <button onclick={() => session.shareProject()} disabled={session.sharing || (!session.sample && !session.pads.some((p) => p.sample))} title="元の音源は15秒までに切り詰めて共有する">
+    <button onclick={() => session.shareProject()} disabled={session.sharing || (!session.bank.sample && !session.pads.some((p) => p.sample))} title="元の音源は15秒までに切り詰めて共有する">
       {session.sharing ? '共有中…' : '共有'}
     </button>
     {#if session.shareLogin}<a href="/api/login" target="_blank" rel="noopener">ログイン</a>{/if}

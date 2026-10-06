@@ -36,7 +36,7 @@
       value={session.bpm}
       onchange={(e) => session.setTransport({ bpm: Number(e.currentTarget.value) })}
     />
-    <button onclick={() => session.detectBpm()} disabled={!session.sample}>推定</button>
+    <button onclick={() => session.detectBpm()} disabled={!session.bank.sample}>推定</button>
   </label>
   <label class="group">
     長さ
