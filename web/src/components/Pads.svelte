@@ -10,7 +10,8 @@
 
 <div class="pads">
   {#each rows as row}
-    {#each row as pad}
+    {#each row as local}
+      {@const pad = session.bankBase + local}
       <button
         class="pad"
         class:selected={session.selectedPad === pad}
@@ -19,9 +20,9 @@
         onpointerdown={(e) => session.padDown(pad, e.timeStamp)}
       >
         {#key session.hits[pad]}<span class="flash" class:on={session.hits[pad] > 0}></span>{/key}
-        <span class="key">{padKeyLabel(pad)}</span>
+        <span class="key">{padKeyLabel(local)}</span>
         <span class="bottom">
-          <span class="num label">{pad + 1}</span>
+          <span class="num label">{local + 1}</span>
           {#if session.labelOf(pad)}
             {@const label = session.labelOf(pad)!}
             <span class="category" class:unsure={!label.manual && label.confidence < 0.5}>

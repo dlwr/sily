@@ -1,11 +1,12 @@
 <script lang="ts">
   import { CATEGORY_LABELS } from '../classify/categories'
+  import { BANK_PADS } from '../state/banks'
   import { padKeyLabel } from '../state/keymap'
   import type { Session } from '../state/session.svelte'
 
   let { session }: { session: Session } = $props()
 
-  const rows = Array.from({ length: 16 }, (_, i) => i)
+  const rows = $derived(Array.from({ length: BANK_PADS }, (_, i) => session.bankBase + i))
   const steps = $derived(Math.round(session.patternBeats / session.grid))
   const wrap = (b: number) => ((b % session.patternBeats) + session.patternBeats) % session.patternBeats
   const pct = (b: number) => `${(wrap(b) / session.patternBeats) * 100}%`
@@ -57,7 +58,7 @@
     {@const label = session.labelOf(pad)}
     <div class="row-wrap" class:empty={!session.hasSound(pad)} class:silenced={!session.audible(pad)}>
       <button class="name" class:selected={session.selectedPad === pad} onclick={() => (session.selectedPad = pad)}>
-        <span class="key">{padKeyLabel(pad)}</span>
+        <span class="key">{padKeyLabel(pad % BANK_PADS)}</span>
         <span class="category">{label ? CATEGORY_LABELS[label.category] : ''}</span>
       </button>
       <button class="toggle" aria-pressed={session.muted[pad]} onclick={() => session.toggleMute(pad)} title="ミュート">M</button>

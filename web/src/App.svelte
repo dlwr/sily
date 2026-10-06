@@ -106,9 +106,10 @@
       if (note !== undefined) session.noteDown(note, e.timeStamp)
       return
     }
-    const pad = padForCode(e.code)
-    if (pad !== undefined) {
+    const local = padForCode(e.code)
+    if (local !== undefined) {
       e.preventDefault()
+      const pad = session.bankBase + local
       heldKeys.set(e.code, pad)
       session.padDown(pad, e.timeStamp)
     }
@@ -178,14 +179,14 @@
           </span>
         {/if}
         {#if session.processing > 0}<span class="muted">ストレッチを計算中…</span>{/if}
-        {#if session.refining}
+        {#if session.bank.refining}
           {@const download = session.modelDownload}
           {#if download && download.loaded < download.total}
             <span class="muted num">モデルを読み込み中 {(download.loaded / 1e6).toFixed(0)} / {(download.total / 1e6).toFixed(0)} MB</span>
             <progress value={download.loaded} max={download.total}></progress>
           {:else}
-            <span class="muted num">音を聞き分け中 {session.refined} / {session.refineTotal}</span>
-            <progress value={session.refined} max={session.refineTotal}></progress>
+            <span class="muted num">音を聞き分け中 {session.bank.refined} / {session.bank.refineTotal}</span>
+            <progress value={session.bank.refined} max={session.bank.refineTotal}></progress>
           {/if}
         {/if}
         {#if session.message}<span class="error">{session.message}</span>{/if}
