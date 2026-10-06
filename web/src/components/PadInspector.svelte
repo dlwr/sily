@@ -97,10 +97,10 @@
   <button aria-pressed={pad.reverse} onclick={() => session.setPad(session.selectedPad, { reverse: !pad.reverse })}>
     逆再生
   </button>
-  <button onclick={() => session.buildKit()} disabled={!session.sample} title="全スライスから役ごとにいちばん近い音を選んでパッドに乗せる">
+  <button onclick={() => session.buildKit()} disabled={!session.bank.sample} title="全スライスから役ごとにいちばん近い音を選んでパッドに乗せる">
     素材からキットを組む
   </button>
-  <button onclick={() => session.arrangePads()} disabled={!session.sample}>定番の配置に並べ替える</button>
+  <button onclick={() => session.arrangePads()} disabled={!session.bank.sample}>定番の配置に並べ替える</button>
   <button onclick={() => session.exportCorrections()} disabled={session.correctionCount === 0}>
     直したラベルを書き出す（{session.correctionCount}）
   </button>

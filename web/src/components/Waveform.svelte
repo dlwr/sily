@@ -14,12 +14,12 @@
   const HANDLE_PX = 6
   const ZOOM_SPEED = 0.01
 
-  const total = $derived(session.sample?.left.length ?? 0)
+  const total = $derived(session.bank.sample?.left.length ?? 0)
   let view = $state<View>({ start: 0, end: 1 })
   const zoomed = $derived(view.start > 0 || view.end < total)
 
   $effect(() => {
-    view = { start: 0, end: Math.max(1, session.sample?.left.length ?? 1) }
+    view = { start: 0, end: Math.max(1, session.bank.sample?.left.length ?? 1) }
   })
 
   $effect(() => {
@@ -32,7 +32,7 @@
   const xOfFrame = (frame: number) => ((frame - view.start) / (view.end - view.start)) * width
 
   const onwheel = (e: WheelEvent) => {
-    if (!session.sample) return
+    if (!session.bank.sample) return
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
       view = zoomView(view, frameOfX(e.offsetX), Math.exp(e.deltaY * ZOOM_SPEED), total)
@@ -50,7 +50,7 @@
   })
 
   const peaks = $derived.by(() => {
-    const mono = session.sample?.mono
+    const mono = session.bank.sample?.mono
     if (!mono || width === 0) return null
     const columns = Math.floor(width)
     const min = new Float32Array(columns)
@@ -100,7 +100,7 @@
 
     ctx.font = '600 12px system-ui, sans-serif'
     const own = session.pads.map((p) => p.sample !== null)
-    session.markers.forEach((m, i) => {
+    session.bank.markers.forEach((m, i) => {
       if (m < view.start || m > view.end) return
       const x = Math.round(xOfFrame(m)) + 0.5
       ctx.strokeStyle = color('--marker')
@@ -126,13 +126,13 @@
     })
   })
 
-  const markerNear = (x: number) => session.markers.find((m) => Math.abs(xOfFrame(m) - x) <= HANDLE_PX) ?? null
+  const markerNear = (x: number) => session.bank.markers.find((m) => Math.abs(xOfFrame(m) - x) <= HANDLE_PX) ?? null
 
   const onpointerdown = (e: PointerEvent) => {
-    if (!session.sample) return
+    if (!session.bank.sample) return
     const x = e.offsetX
     if (e.button === 2 || e.altKey) {
-      session.removeMarkerNear(frameOfX(x), (HANDLE_PX / width) * session.sample.left.length)
+      session.removeMarkerNear(frameOfX(x), (HANDLE_PX / width) * session.bank.sample.left.length)
       return
     }
     if (e.shiftKey) {
@@ -180,7 +180,7 @@
       {/key}
     {/if}
   {/each}
-  {#if session.auditionFrame !== null && session.sample}
+  {#if session.auditionFrame !== null && session.bank.sample}
     <div class="playhead" style:transform="translateX({xOfFrame(session.auditionFrame)}px)"></div>
   {/if}
   {#if zoomed}
@@ -189,7 +189,7 @@
     </div>
     <button class="fit" onclick={() => (view = { start: 0, end: total })}>全体</button>
   {/if}
-  {#if !session.sample}
+  {#if !session.bank.sample}
     <p class="empty">音声ファイルをドロップ、または下の「PCの音を録音」で鳴っている音を取り込む</p>
   {/if}
 </div>
