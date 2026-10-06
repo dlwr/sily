@@ -1,4 +1,4 @@
-import { unzipSync, zipSync } from 'fflate'
+import { unzipSync, Zip, ZipPassThrough, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { pack, type Bundle } from '../src/storage/bundle'
 import { handlePublicShare, handleShares, type ShareRecord, type ShareStore } from './shares'
@@ -39,7 +39,7 @@ const memoryStore = () => {
 const bundle = (over: Partial<Bundle> = {}): Uint8Array =>
   pack({
     project: { name: 'beat', state: { bpm: 92 } },
-    source: { name: 'break.wav', sampleRate: 100, left: new Float32Array(1000), right: new Float32Array(1000) },
+    source: { name: 'break.wav', sampleRate: 8000, left: new Float32Array(80000), right: new Float32Array(80000) },
     samples: [],
     ...over,
   })
@@ -71,13 +71,13 @@ describe('handleShares', () => {
 
   it('rejects a source longer than fifteen seconds', async () => {
     const { store } = memoryStore()
-    const long = bundle({ source: { name: 'x', sampleRate: 100, left: new Float32Array(1600), right: new Float32Array(1600) } })
+    const long = bundle({ source: { name: 'x', sampleRate: 8000, left: new Float32Array(128000), right: new Float32Array(128000) } })
     expect((await upload(store, long)).status).toBe(400)
   })
 
   it('rejects an upload that is too large', async () => {
     const { store } = memoryStore()
-    expect((await upload(store, new Uint8Array(21 * 1024 * 1024))).status).toBe(413)
+    expect((await upload(store, new Uint8Array(11 * 1024 * 1024))).status).toBe(413)
   })
 
   it('rejects a streamed upload that grows too large', async () => {
@@ -97,8 +97,45 @@ describe('handleShares', () => {
   it('rejects source audio longer than its manifest says', async () => {
     const { store } = memoryStore()
     const files = unzipSync(bundle())
-    files['source.f32'] = new Uint8Array(1600 * 8)
+    files['source.f32'] = new Uint8Array(128000 * 8)
     expect((await upload(store, zipSync(files))).status).toBe(400)
+  })
+
+  it('rejects a file the manifest does not list', async () => {
+    const { store } = memoryStore()
+    const files = unzipSync(bundle())
+    files['samples/extra.f32'] = new Uint8Array(8)
+    expect((await upload(store, zipSync(files))).status).toBe(400)
+  })
+
+  it('rejects a sample longer than its manifest says', async () => {
+    const { store } = memoryStore()
+    const meta = { id: 's1', name: 'kick', category: 'kick', sampleRate: 8000, frames: 10, createdAt: 1, settings: {} }
+    const files = unzipSync(bundle({ samples: [{ meta, left: new Float32Array(10), right: new Float32Array(10) }] }))
+    files['samples/s1.f32'] = new Uint8Array(400)
+    expect((await upload(store, zipSync(files))).status).toBe(400)
+  })
+
+  it('rejects a source with an implausible sample rate', async () => {
+    const { store } = memoryStore()
+    const fake = bundle({ source: { name: 'x', sampleRate: 1e6, left: new Float32Array(1000), right: new Float32Array(1000) } })
+    expect((await upload(store, fake)).status).toBe(400)
+  })
+
+  it('rejects a bundle that repeats a file name', async () => {
+    const { store } = memoryStore()
+    const files = unzipSync(bundle())
+    const chunks: Uint8Array[] = []
+    const zip = new Zip((_, chunk) => chunks.push(chunk))
+    for (const [name, data] of [...Object.entries(files), ['source.f32', files['source.f32']] as const]) {
+      const entry = new ZipPassThrough(name)
+      zip.add(entry)
+      entry.push(data, true)
+    }
+    zip.end()
+    const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+    chunks.reduce((offset, c) => (bytes.set(c, offset), offset + c.length), 0)
+    expect((await upload(store, bytes)).status).toBe(400)
   })
 
   it('rejects a bundle that would unpack too large', async () => {

@@ -59,3 +59,21 @@ export const unpack = (bytes: Uint8Array): Bundle => {
     samples: manifest.samples.map((meta) => ({ meta, ...decode(files[`samples/${meta.id}.f32`], meta.frames) })),
   }
 }
+
+type PadRef = { sample?: { id: string } | null }
+
+export const withFreshSampleIds = (bundle: Bundle, newId: () => string): Bundle => {
+  const ids = new Map(bundle.samples.map((s) => [s.meta.id, newId()]))
+  const pads = bundle.project.state.pads as PadRef[] | undefined
+  return {
+    ...bundle,
+    project: {
+      ...bundle.project,
+      state: {
+        ...bundle.project.state,
+        pads: pads?.map((p) => (p.sample && ids.has(p.sample.id) ? { ...p, sample: { ...p.sample, id: ids.get(p.sample.id)! } } : p)),
+      },
+    },
+    samples: bundle.samples.map((s) => ({ ...s, meta: { ...s.meta, id: ids.get(s.meta.id)! } })),
+  }
+}

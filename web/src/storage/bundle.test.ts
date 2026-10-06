@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pack, unpack, type Bundle } from './bundle'
+import { pack, unpack, withFreshSampleIds, type Bundle } from './bundle'
 
 const bundle: Bundle = {
   project: { name: 'beat', state: { bpm: 92, markers: [0, 100] } },
@@ -39,5 +39,22 @@ describe('bundle', () => {
 
   it('rejects files that are not sily projects', () => {
     expect(() => unpack(new Uint8Array([1, 2, 3]))).toThrow()
+  })
+})
+
+describe('withFreshSampleIds', () => {
+  const ids = () => {
+    let n = 0
+    return () => `new${++n}`
+  }
+  const withPad = { ...bundle, project: { name: 'beat', state: { pads: [{ sample: { id: 's1', name: 'kick', category: 'kick' } }, { sample: null }] } } }
+
+  it('gives each sample a new id', () => {
+    expect(withFreshSampleIds(withPad, ids()).samples[0].meta.id).toBe('new1')
+  })
+
+  it('points the pads at the new ids', () => {
+    const pads = withFreshSampleIds(withPad, ids()).project.state.pads as { sample: { id: string } | null }[]
+    expect(pads.map((p) => p.sample?.id ?? null)).toEqual(['new1', null])
   })
 })
