@@ -13,6 +13,7 @@ export type ToWorklet =
   | { type: 'sourceRate'; source: number; rate: number }
   | { type: 'padMix'; pad: number; pan: number; reverb: number; delay: number }
   | { type: 'reverb'; size: number; damping: number; level: number }
+  | { type: 'comp'; pad: number | null; amount: number }
   | { type: 'delay'; feedback: number; toneHz: number; pingPong: boolean; beats: number; level: number }
   | { type: 'trigger'; pad: number; velocity: number; pitch: number }
   | { type: 'note'; slice: number; semitones: number; velocity: number }

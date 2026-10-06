@@ -408,3 +408,13 @@ pub extern "C" fn engine_set_reverb(size: f32, damping: f32, level: f32) {
 pub extern "C" fn engine_set_delay(feedback: f32, tone_hz: f32, ping_pong: u32, beats: f64, level: f32) {
     engine().set_delay(DelaySettings { feedback, tone_hz, ping_pong: ping_pong != 0 }, beats, level);
 }
+
+#[no_mangle]
+pub extern "C" fn engine_set_pad_comp(pad: u32, amount: f32) {
+    engine().set_pad_comp(pad as usize, amount);
+}
+
+#[no_mangle]
+pub extern "C" fn engine_set_glue(amount: f32) {
+    engine().set_glue(amount);
+}
