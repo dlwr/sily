@@ -1,3 +1,4 @@
+use crate::comp::{Compressor, Style};
 use crate::fx::{FxChain, FxSettings};
 use crate::sends::{Delay, DelaySettings, Reverb, ReverbSettings};
 use crate::sequencer::{grooved, Event, Groove, Pattern};
@@ -107,7 +108,9 @@ pub struct Engine {
     out: [Vec<f32>; 2],
     buses: Vec<[Vec<f32>; 2]>,
     pad_fx: Vec<FxChain>,
+    pad_comp: Vec<Compressor>,
     master_fx: FxChain,
+    glue: Compressor,
     sends: [[Vec<f32>; 2]; 2],
     reverb: Reverb,
     reverb_level: f32,
@@ -149,7 +152,9 @@ impl Engine {
             out: [vec![0.0; max_block], vec![0.0; max_block]],
             buses: (0..PADS).map(|_| [vec![0.0; max_block], vec![0.0; max_block]]).collect(),
             pad_fx: (0..PADS).map(|_| FxChain::new(sample_rate as f32)).collect(),
+            pad_comp: (0..PADS).map(|_| Compressor::new(sample_rate as f32, Style::Punch)).collect(),
             master_fx: FxChain::new(sample_rate as f32),
+            glue: Compressor::new(sample_rate as f32, Style::Glue),
             sends: std::array::from_fn(|_| [vec![0.0; max_block], vec![0.0; max_block]]),
             reverb: Reverb::new(sample_rate as f32),
             reverb_level: 0.0,
@@ -504,6 +509,16 @@ impl Engine {
         self.master_fx.set(settings);
     }
 
+    pub fn set_pad_comp(&mut self, pad: usize, amount: f32) {
+        if let Some(c) = self.pad_comp.get_mut(pad) {
+            c.set(amount);
+        }
+    }
+
+    pub fn set_glue(&mut self, amount: f32) {
+        self.glue.set(amount);
+    }
+
     pub fn set_pad_mix(&mut self, pad: usize, pan: f32, reverb_send: f32, delay_send: f32) {
         if let Some(p) = self.pads.get_mut(pad) {
             p.pan = pan.clamp(-1.0, 1.0);
@@ -528,9 +543,10 @@ impl Engine {
             send[0][..frames].fill(0.0);
             send[1][..frames].fill(0.0);
         }
-        for ((bus, fx), pad) in self.buses.iter_mut().zip(&mut self.pad_fx).zip(&self.pads) {
+        for (((bus, fx), comp), pad) in self.buses.iter_mut().zip(&mut self.pad_fx).zip(&mut self.pad_comp).zip(&self.pads) {
             let [l, r] = bus;
             fx.process(&mut l[..frames], &mut r[..frames]);
+            comp.process(&mut l[..frames], &mut r[..frames]);
             let gains = [(1.0 - pad.pan).min(1.0), (1.0 + pad.pan).min(1.0)];
             let amounts = [pad.reverb_send, pad.delay_send];
             for i in 0..frames {
@@ -556,6 +572,7 @@ impl Engine {
             add_return(&mut self.out, [&delay_l[..frames], &delay_r[..frames]], self.delay_level);
         }
         let [l, r] = &mut self.out;
+        self.glue.process(&mut l[..frames], &mut r[..frames]);
         self.master_fx.process(&mut l[..frames], &mut r[..frames]);
     }
 
@@ -1257,6 +1274,30 @@ mod tests {
         e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 1500);
         assert_eq!(first_sound(&out[200..]).map(|i| i + 200), Some(1000));
+    }
+
+    #[test]
+    fn a_compressed_pad_comes_down_from_a_loud_level() {
+        let mut e = Engine::new(44_100.0, 4096);
+        e.load_source(0, vec![0.9; 44_100], vec![0.9; 44_100]);
+        e.set_pad_comp(0, 1.0);
+        e.trigger(0, 1.0, 0.0);
+        for i in 0..20 {
+            e.process(128, i as f64 * 128.0 / 44_100.0);
+        }
+        assert!(e.output(0)[64] < 0.6, "{}", e.output(0)[64]);
+    }
+
+    #[test]
+    fn the_glue_compresses_the_whole_mix() {
+        let mut e = Engine::new(44_100.0, 4096);
+        e.load_source(0, vec![0.9; 44_100], vec![0.9; 44_100]);
+        e.set_glue(1.0);
+        e.trigger(0, 1.0, 0.0);
+        for i in 0..40 {
+            e.process(128, i as f64 * 128.0 / 44_100.0);
+        }
+        assert!(e.output(0)[64] < 0.8, "{}", e.output(0)[64]);
     }
 
     fn constant(value: f32, frames: usize) -> Vec<f32> {
