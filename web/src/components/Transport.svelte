@@ -68,7 +68,7 @@
     </select>
     {#if session.keyAuto}<span class="muted">推定</span>{/if}
   </label>
-  <label class="group" title="分類に合わせて、各パッドのピッチと EQ を自動で整える">
+  <label class="group" title="分類に合わせて、各パッドのピッチ、EQ、コンプ、リバーブとディレイへの送りを自動で整える">
     <input type="checkbox" checked={session.autoShape} onchange={(e) => session.setAutoShape(e.currentTarget.checked)} />
     自動で整える
   </label>
@@ -83,6 +83,11 @@
       oninput={(e) => session.setMasterFx({ drive_db: Number(e.currentTarget.value) })}
     />
     <span class="num value">+{session.masterFx.drive_db.toFixed(1)}</span>
+  </label>
+  <label class="group" title="全体を軽くまとめるコンプ">
+    グルー
+    <input type="range" min="0" max="1" step="0.05" value={session.glue} oninput={(e) => session.setGlue(Number(e.currentTarget.value))} />
+    <span class="num value">{Math.round(session.glue * 100)}%</span>
   </label>
   <label class="group">
     グリッド

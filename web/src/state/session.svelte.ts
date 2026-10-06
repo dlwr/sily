@@ -9,7 +9,7 @@ import { ClapClient, type ModelDownload } from '../classify/clapClient'
 import { resample } from '../classify/clap'
 import { probeScores, type Probe } from '../classify/probe'
 import probe from '../classify/probe.json'
-import { DEFAULT_FX, isFlat, type FxSettings } from '../fx/fx'
+import { DEFAULT_FX, DEFAULT_RETURNS, isFlat, type FxSettings, type Returns } from '../fx/fx'
 import { newId } from '../storage/db'
 import { pack, unpack, withFreshSampleIds, type Bundle, type BundleSource } from '../storage/bundle'
 import { deleteSample, importSample, listSamples, loadSample, saveSample, type SampleMeta } from '../storage/library'
@@ -25,7 +25,7 @@ import {
 } from '../storage/projects'
 import { untrack } from 'svelte'
 import { candidateStyles, generate, type PadInfo, type Style, type StyleChoice } from '../generate/generate'
-import { autoFx, autoPitch, estimateKey, type Key } from '../shape/shape'
+import { autoFx, autoMix, autoPitch, estimateKey, NO_MIX, type Key } from '../shape/shape'
 import { encodeWav24, soundingLength } from '../export/wav'
 import { uploadCorrection } from '../corrections/upload'
 import { sha256Hex } from '../corrections/hash'
@@ -57,6 +57,10 @@ export type PadSettings = {
   sample: PadSample | null
   pitchAuto: boolean
   fxAuto: boolean
+  pan: number
+  comp: number
+  sends: { reverb: number; delay: number }
+  mixAuto: boolean
 }
 type Heard = { events: PadEvent[]; length: number }
 type Span = [number, number] | null
@@ -86,6 +90,10 @@ const freshPad = (): PadSettings => ({
   sample: null,
   pitchAuto: true,
   fxAuto: true,
+  pan: 0,
+  comp: 0,
+  sends: { reverb: 0, delay: 0 },
+  mixAuto: true,
 })
 const CORRECTIONS_KEY = 'sily.corrections'
 const CORRECTIONS_REFUSED_KEY = 'sily.corrections.refused'
@@ -106,7 +114,7 @@ export class Session {
   banks = $state.raw<Bank[]>(Array.from({ length: BANKS }, (_, i) => new Bank(i)))
   focusedBank = $state(0)
   pads = $state<PadSettings[]>(
-    Array.from({ length: PADS }, () => ({ pitch: 0, gain: 1, stretch: false, reverse: false, choke: 0, chokeAuto: true, fx: { ...DEFAULT_FX }, sample: null, pitchAuto: true, fxAuto: true })),
+    Array.from({ length: PADS }, freshPad),
   )
   selectedPad = $state(0)
   labelingSlice = $state<number | null>(null)
@@ -149,6 +157,8 @@ export class Session {
   modelDownload = $state<ModelDownload | null>(null)
   processing = $state(0)
   masterFx = $state<FxSettings>({ ...DEFAULT_FX })
+  glue = $state(0)
+  returns = $state<Returns>(structuredClone(DEFAULT_RETURNS))
   library = $state<SampleMeta[]>([])
   key = $state<Key>({ root: 0, minor: true })
   keyAuto = $state(true)
@@ -425,6 +435,8 @@ export class Session {
       density: this.density,
       looseness: this.looseness,
       masterFx: this.masterFx,
+      glue: this.glue,
+      returns: this.returns,
       key: this.key,
       keyAuto: this.keyAuto,
       autoShape: this.autoShape,
@@ -487,6 +499,9 @@ export class Session {
     this.events = []
     this.resetSong()
     this.masterFx = { ...DEFAULT_FX }
+    this.glue = 0
+    this.returns = structuredClone(DEFAULT_RETURNS)
+    this.syncReturns()
     this.syncOwn()
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.sily?.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
@@ -586,6 +601,12 @@ export class Session {
     this.density = st.density ?? this.density
     this.looseness = st.looseness ?? this.looseness
     this.masterFx = { ...DEFAULT_FX, ...st.masterFx }
+    this.glue = st.glue ?? 0
+    this.returns = {
+      reverb: { ...DEFAULT_RETURNS.reverb, ...st.returns?.reverb },
+      delay: { ...DEFAULT_RETURNS.delay, ...st.returns?.delay },
+    }
+    this.syncReturns()
     this.key = st.key ?? this.key
     this.keyAuto = st.keyAuto ?? true
     this.autoShape = st.autoShape ?? true
@@ -1342,6 +1363,7 @@ export class Session {
     this.checkpoint()
     this.pads[pad].pitchAuto = true
     this.pads[pad].fxAuto = true
+    this.pads[pad].mixAuto = true
     this.shapePads()
   }
 
@@ -1371,6 +1393,14 @@ export class Session {
           changed = true
         }
       }
+      if (p.mixAuto) {
+        const mix = this.autoShape && label ? autoMix(label.category) : NO_MIX
+        if (mix.comp !== p.comp || JSON.stringify(mix.sends) !== JSON.stringify(p.sends)) {
+          p.comp = mix.comp
+          p.sends = { ...mix.sends }
+          changed = true
+        }
+      }
       if (changed) this.sendPad(pad)
     })
     if (pitchChanged) this.fillStretched()
@@ -1380,6 +1410,41 @@ export class Session {
     const p = this.pads[pad]
     this.sily?.send({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })
     this.sily?.send({ type: 'fx', pad, fx: $state.snapshot(p.fx) })
+    this.sily?.send({ type: 'padMix', pad, pan: p.pan, reverb: p.sends.reverb, delay: p.sends.delay })
+    this.sily?.send({ type: 'comp', pad, amount: p.comp })
+  }
+
+  setPadMix(pad: number, patch: Partial<Pick<PadSettings, 'pan' | 'comp' | 'sends'>>) {
+    this.checkpoint(`mix:${pad}:${Object.keys(patch).join()}`)
+    Object.assign(this.pads[pad], patch)
+    if ('comp' in patch || 'sends' in patch) this.pads[pad].mixAuto = false
+    this.sendPad(pad)
+  }
+
+  setGlue(amount: number) {
+    this.glue = amount
+    this.sily?.send({ type: 'comp', pad: null, amount })
+  }
+
+  setReturns(patch: { reverb?: Partial<Returns['reverb']>; delay?: Partial<Returns['delay']> }) {
+    this.returns = {
+      reverb: { ...this.returns.reverb, ...patch.reverb },
+      delay: { ...this.returns.delay, ...patch.delay },
+    }
+    this.syncReturns()
+  }
+
+  private returnMessages(): ToWorklet[] {
+    const { reverb, delay } = $state.snapshot(this.returns)
+    return [
+      { type: 'reverb', size: reverb.size, damping: reverb.damping, level: reverb.level },
+      { type: 'delay', feedback: delay.feedback, toneHz: delay.toneHz, pingPong: delay.pingPong, beats: delay.beats, level: delay.level },
+      { type: 'comp', pad: null, amount: this.glue },
+    ]
+  }
+
+  private syncReturns() {
+    for (const msg of this.returnMessages()) this.sily?.send(msg)
   }
 
   setPadFx(pad: number, patch: Partial<FxSettings>) {
@@ -1978,6 +2043,9 @@ export class Session {
       { type: 'padSpans', spans: this.engineSpans() },
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'pad', pad, pitch: p.pitch, gain: p.gain, reverse: p.reverse, choke: p.choke })),
       ...this.pads.map((p, pad): ToWorklet => ({ type: 'fx', pad, fx: $state.snapshot(p.fx) })),
+      ...this.pads.map((p, pad): ToWorklet => ({ type: 'padMix', pad, pan: p.pan, reverb: p.sends.reverb, delay: p.sends.delay })),
+      ...this.pads.map((p, pad): ToWorklet => ({ type: 'comp', pad, amount: p.comp })),
+      ...this.returnMessages(),
       ...[...this.own].map(([pad, a]): ToWorklet => ({ type: 'padSample', pad, left: a.left, right: a.right })),
       { type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) },
       ...[...this.stretched.values()].map((b): ToWorklet => ({ type: 'stretched', ...b })),

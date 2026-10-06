@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { autoFx, autoPitch, estimateKey, type Key } from './shape'
+import { autoFx, autoMix, autoPitch, estimateKey, type Key } from './shape'
 
 const C_MINOR: Key = { root: 0, minor: true }
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12)
@@ -64,5 +64,28 @@ describe('autoFx', () => {
 
   it('leaves effects sounds alone', () => {
     expect(autoFx('fx')).toBeNull()
+  })
+})
+
+describe('autoMix', () => {
+  it('sends a snare a little to the reverb', () => {
+    expect(autoMix('snare').sends.reverb).toBeGreaterThan(0)
+  })
+
+  it('keeps the kick dry', () => {
+    expect(autoMix('kick').sends).toEqual({ reverb: 0, delay: 0 })
+  })
+
+  it('sends upper parts to the delay as well', () => {
+    expect(autoMix('upper').sends.delay).toBeGreaterThan(0)
+  })
+
+  it('compresses the kick', () => {
+    expect(autoMix('kick').comp).toBeGreaterThan(0)
+  })
+
+  it('never sends more than a fifth of a pad', () => {
+    const all = ['kick', 'snare', 'clap', 'rim', 'closed_hat', 'open_hat', 'tom', 'cymbal', 'perc', 'bass', 'keys', 'vocal', 'melody', 'fx', 'upper'] as const
+    expect(all.every((c) => autoMix(c).sends.reverb <= 0.2 && autoMix(c).sends.delay <= 0.2)).toBe(true)
   })
 })
