@@ -201,6 +201,12 @@ export class Session {
     this.selectedPad = this.bankBase + (this.selectedPad % BANK_PADS)
   }
 
+  private resetFocus() {
+    this.stopLabeling()
+    this.focusedBank = Math.max(0, this.banks.findIndex((b) => b.sample))
+    this.selectedPad = this.bankBase + (this.selectedPad % BANK_PADS)
+  }
+
   cycleBank(delta: number) {
     this.focusBank((this.focusedBank + delta + BANKS) % BANKS)
   }
@@ -456,6 +462,7 @@ export class Session {
     this.pads.forEach((_, pad) => this.sendPad(pad))
     this.sily?.send({ type: 'fx', pad: null, fx: $state.snapshot(this.masterFx) })
     this.syncEvents()
+    this.resetFocus()
     this.lastSaved = ''
   }
 
@@ -565,6 +572,7 @@ export class Session {
       this.applySource(bank)
       this.classifySlices(bank)
     })
+    this.resetFocus()
     this.lastSaved = JSON.stringify(this.projectState())
   }
 
