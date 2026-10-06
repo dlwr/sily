@@ -4,6 +4,7 @@
   import type { Session } from '../state/session.svelte'
   import PadFx from './PadFx.svelte'
   import PadLibrary from './PadLibrary.svelte'
+  import PadMix from './PadMix.svelte'
 
   let { session }: { session: Session } = $props()
 
@@ -88,14 +89,15 @@
     </select>
     <span class="num muted">{pad.choke > 0 ? pad.choke : ''}</span>
   </label>
-  {#if !pad.sample && (!pad.pitchAuto || !pad.fxAuto)}
-    <button onclick={() => session.resetPadShape(session.selectedPad)} title="手で変えたピッチと音作りを、自動で整えた値に戻す">
-      ピッチと音作りを自動に戻す
+  {#if !pad.sample && (!pad.pitchAuto || !pad.fxAuto || !pad.mixAuto)}
+    <button onclick={() => session.resetPadShape(session.selectedPad)} title="手で変えたピッチ、音作り、ミックスを、自動で整えた値に戻す">
+      ピッチと音作りとミックスを自動に戻す
     </button>
   {:else if !pad.sample && session.autoShape}
     <p class="muted hint">ピッチと音作りは自動で整えている（キー {session.key.minor ? '短調' : '長調'}）</p>
   {/if}
   <PadFx {session} />
+  <PadMix {session} />
   <PadLibrary {session} />
   <div class="modes" role="radiogroup" aria-label="ピッチの扱い">
     <button aria-pressed={!pad.stretch} onclick={() => session.setPad(session.selectedPad, { stretch: false })}>
