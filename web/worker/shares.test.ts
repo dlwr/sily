@@ -1,5 +1,6 @@
 import { strToU8, unzipSync, Zip, ZipPassThrough, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
+import { MAX_SHARE_BYTES } from '../src/share/limits'
 import { pack, type Bundle } from '../src/storage/bundle'
 import { handlePublicShare, handleShares, type ShareRecord, type ShareStore } from './shares'
 
@@ -88,6 +89,13 @@ describe('handleShares', () => {
     expect((await upload(store, bundle({ sources: [source, source, source, source] }))).status).toBe(201)
   })
 
+  it('accepts four fifteen-second sources at 48 kHz', async () => {
+    const { store } = memoryStore()
+    const noise = () => Float32Array.from({ length: 15 * 48000 }, () => Math.random() * 2 - 1)
+    const source = () => ({ name: 'x', sampleRate: 48000, left: noise(), right: noise() })
+    expect((await upload(store, bundle({ sources: [source(), source(), source(), source()] }))).status).toBe(201)
+  })
+
   it('rejects more sources than there are banks', async () => {
     const { store } = memoryStore()
     const source = { name: 'x', sampleRate: 8000, left: new Float32Array(10), right: new Float32Array(10) }
@@ -109,7 +117,7 @@ describe('handleShares', () => {
 
   it('rejects an upload that is too large', async () => {
     const { store } = memoryStore()
-    expect((await upload(store, new Uint8Array(11 * 1024 * 1024))).status).toBe(413)
+    expect((await upload(store, new Uint8Array(MAX_SHARE_BYTES + 1))).status).toBe(413)
   })
 
   it('rejects a streamed upload that grows too large', async () => {
@@ -118,7 +126,7 @@ describe('handleShares', () => {
     let sent = 0
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
-        if (sent++ > 24) controller.close()
+        if (sent++ > MAX_SHARE_BYTES / chunk.length) controller.close()
         else controller.enqueue(chunk)
       },
     })
