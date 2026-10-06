@@ -1,10 +1,11 @@
 use crate::fx::{FxChain, FxSettings};
-use crate::sequencer::{Event, Groove, Pattern};
+use crate::sequencer::{grooved, Event, Groove, Pattern};
 use crate::slicing::slices;
 
 pub const PADS: usize = 16;
 const VOICES: usize = 32;
 const MAX_EVENTS: usize = 16384;
+const MAX_REPEATS: usize = 256;
 
 #[derive(Debug, Clone, Default)]
 struct Pad {
@@ -14,6 +15,21 @@ struct Pad {
     choke: Option<u8>,
     own: Option<[Vec<f32>; 2]>,
     stretched: Vec<(i64, [Vec<f32>; 2])>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    velocity: f32,
+    pitch: f64,
+    next_line: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Repeat {
+    pub pad: u8,
+    pub velocity: f32,
+    pub pitch: f64,
+    pub beat: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,6 +97,9 @@ pub struct Engine {
     pad_fx: Vec<FxChain>,
     master_fx: FxChain,
     pending: Vec<(usize, Event)>,
+    held: [Option<Held>; PADS],
+    repeats: Vec<Repeat>,
+    block_played: f64,
     fade_in: usize,
     fade_out: usize,
 }
@@ -116,6 +135,9 @@ impl Engine {
             pad_fx: (0..PADS).map(|_| FxChain::new(sample_rate as f32)).collect(),
             master_fx: FxChain::new(sample_rate as f32),
             pending: Vec::with_capacity(MAX_EVENTS),
+            held: [None; PADS],
+            repeats: Vec::with_capacity(MAX_REPEATS),
+            block_played: 0.0,
             fade_in: ((sample_rate * 0.002) as usize).max(1),
             fade_out: ((sample_rate * 0.004) as usize).max(1),
         }
@@ -223,8 +245,35 @@ impl Engine {
         if playing && !self.playing {
             self.beat = 0.0;
             self.played = 0.0;
+            self.block_played = 0.0;
+        }
+        if playing != self.playing {
+            self.release_all();
         }
         self.playing = playing;
+    }
+
+    pub fn hold(&mut self, pad: usize, velocity: f32, pitch: f64, time: f64) {
+        if !self.playing || pad >= PADS {
+            return;
+        }
+        let played = self.block_played + (time - self.block_time) * self.beats_per_second();
+        let next_line = (played / self.pattern.groove().grid).round() + 1.0;
+        self.held[pad] = Some(Held { velocity, pitch, next_line });
+    }
+
+    pub fn release(&mut self, pad: usize) {
+        if let Some(held) = self.held.get_mut(pad) {
+            *held = None;
+        }
+    }
+
+    pub fn release_all(&mut self) {
+        self.held = [None; PADS];
+    }
+
+    pub fn repeats(&self) -> &[Repeat] {
+        &self.repeats
     }
 
     pub fn set_play_limit(&mut self, beats: Option<f64>) {
@@ -305,6 +354,8 @@ impl Engine {
         let frames = frames.min(self.out[0].len());
         self.block_time = time;
         self.block_beat = self.beat;
+        self.block_played = self.played;
+        self.repeats.clear();
         for ch in &mut self.out {
             ch[..frames].fill(0.0);
         }
@@ -345,6 +396,24 @@ impl Engine {
                     });
                 }
             }
+            let groove = self.pattern.groove();
+            let end = self.played + audible_span;
+            for (pad, held) in self.held.iter_mut().enumerate() {
+                let Some(h) = held else { continue };
+                loop {
+                    let straight = h.next_line * groove.grid;
+                    let at = grooved(straight, groove).max(self.played);
+                    if at >= end || self.pending.len() == self.pending.capacity() || self.repeats.len() == self.repeats.capacity() {
+                        break;
+                    }
+                    let event = Event { beat: 0.0, pad: pad as u8, velocity: h.velocity, nudge: 0.0, pitch: h.pitch };
+                    self.pending.push((frame_offset(at - self.played, beats_per_frame, frames), event));
+                    let beat = (((self.beat + straight - self.played) * 1e9).round() / 1e9).rem_euclid(length);
+                    self.repeats.push(Repeat { pad: pad as u8, velocity: h.velocity, pitch: h.pitch, beat });
+                    h.next_line += 1.0;
+                }
+            }
+            self.pending.sort_unstable_by_key(|(offset, _)| *offset);
             if self.metronome {
                 let mut k = self.beat.ceil();
                 let mut n = 0;
@@ -359,6 +428,7 @@ impl Engine {
             self.played += span;
             if self.play_limit.is_some_and(|limit| self.played >= limit) {
                 self.playing = false;
+                self.release_all();
             }
         }
         let mut cursor = 0;
@@ -1319,5 +1389,103 @@ mod tests {
         e.trigger(0, 1.0, 0.0);
         let out = render(&mut e, 50);
         assert!((out[20] - 0.8).abs() < 0.11, "{}", out[20]);
+    }
+
+    fn repeating(bpm: f64) -> Engine {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(bpm);
+        e.set_pattern_length(4.0);
+        e.set_playing(true);
+        e
+    }
+
+    fn render_repeats(e: &mut Engine, frames: usize) -> Vec<(u8, f64)> {
+        let mut out = Vec::new();
+        let mut time = 0.0;
+        let mut left = frames;
+        while left > 0 {
+            let n = left.min(128);
+            e.process(n, time);
+            out.extend(e.repeats().iter().map(|r| (r.pad, r.beat)));
+            time += n as f64 / SR;
+            left -= n;
+        }
+        out
+    }
+
+    #[test]
+    fn held_pad_repeats_on_the_next_grid_lines() {
+        let mut e = repeating(60.0);
+        e.hold(0, 1.0, 0.0, 0.0);
+        let out = render(&mut e, 600);
+        assert_eq!(first_sound(&out), Some(250));
+        assert_eq!(first_sound(&out[300..]).map(|i| i + 300), Some(500));
+    }
+
+    #[test]
+    fn the_grid_line_nearest_the_press_is_left_to_the_press() {
+        let mut e = repeating(60.0);
+        e.hold(0, 1.0, 0.0, 0.24);
+        assert_eq!(first_sound(&render(&mut e, 600)), Some(500));
+    }
+
+    #[test]
+    fn releasing_stops_the_repeat() {
+        let mut e = repeating(60.0);
+        e.hold(0, 1.0, 0.0, 0.0);
+        render(&mut e, 300);
+        e.release(0);
+        assert_eq!(first_sound(&render(&mut e, 600)), None);
+    }
+
+    #[test]
+    fn stopping_the_transport_lets_go_of_held_pads() {
+        let mut e = repeating(60.0);
+        e.hold(0, 1.0, 0.0, 0.0);
+        e.set_playing(false);
+        e.set_playing(true);
+        assert_eq!(first_sound(&render(&mut e, 600)), None);
+    }
+
+    #[test]
+    fn holding_while_stopped_does_nothing() {
+        let mut e = engine_with(vec![0.5; 10]);
+        e.set_bpm(60.0);
+        e.hold(0, 1.0, 0.0, 0.0);
+        e.set_playing(true);
+        assert_eq!(first_sound(&render(&mut e, 600)), None);
+    }
+
+    #[test]
+    fn repeats_follow_the_swing() {
+        let mut e = repeating(60.0);
+        e.set_groove(Groove { grid: 0.25, strength: 1.0, swing: 0.75 });
+        e.hold(0, 1.0, 0.0, 0.0);
+        assert_eq!(first_sound(&render(&mut e, 400)), Some(375));
+    }
+
+    #[test]
+    fn repeats_are_reported_on_the_straight_grid() {
+        let mut e = repeating(60.0);
+        e.set_groove(Groove { grid: 0.25, strength: 1.0, swing: 0.75 });
+        e.hold(2, 1.0, 0.0, 0.0);
+        assert_eq!(render_repeats(&mut e, 600), vec![(2, 0.25), (2, 0.5)]);
+    }
+
+    #[test]
+    fn reported_beats_wrap_into_the_pattern() {
+        let mut e = repeating(60.0);
+        e.set_pattern_length(1.0);
+        e.hold(0, 1.0, 0.0, 0.0);
+        let beats: Vec<f64> = render_repeats(&mut e, 1300).into_iter().map(|(_, b)| b).collect();
+        assert_eq!(beats, vec![0.25, 0.5, 0.75, 0.0, 0.25]);
+    }
+
+    #[test]
+    fn repeats_interleave_with_pattern_events_in_order() {
+        let mut e = repeating(60.0);
+        e.add_event(Event { beat: 0.3, pad: 5, velocity: 1.0, nudge: 0.0, pitch: 0.0 });
+        e.hold(0, 1.0, 0.0, 0.0);
+        assert_eq!(first_sound(&render(&mut e, 400)), Some(250));
     }
 }
